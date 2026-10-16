@@ -168,12 +168,15 @@ pepe -i -c 50 -z 30s https://example.com
 - Paste a curl command anywhere and the form is filled in from it.
 - `ctrl-t` sends the request once and shows the response, to check it before the run.
 - `ctrl-s` saves the form under a name, as `.pepe/tests/NAME.toml` next to the code; `pepe --load NAME` runs it again. The name it offers comes from the URL, and a taken name asks before it's replaced.
+- `ctrl-s` on the dashboard and the ramp screen saves the run's settings the same way, with the concurrency as dialed in. A run started from a saved test offers its own name, so enter updates it in place, and another name makes a copy.
+- `ctrl-o` opens the saved tests. When the project has any, `pepe` alone opens on them: a list with each test's mode, target, load and age, and the command it runs as. `enter` or a double click puts one in the form, `n` starts from an empty form, `c` copies the selected test under another name.
 - The command card always shows the flags that reproduce the form. It's printed to your shell when you quit, and `e` in the dashboard brings you back to the form.
 - `F1` (or `?` outside a text field) lists the keys; `esc` quits.
+- The mouse works here as on every pepe screen: click a field to focus it, a mode tab to switch, or a key at the bottom to press it; the wheel moves between fields.
 
 ## Config file
 
-A load test can live next to the code it tests. Put a `pepe.toml` in the directory and `pepe` alone runs it; flags on the command line win over the file, and the file wins over pepe's defaults.
+A load test can live next to the code it tests. Put a `pepe.toml` in the directory and `pepe` alone runs it; flags on the command line win over the file, and the file wins over this machine's [settings](install.md#settings) and pepe's defaults.
 
 ```toml
 url = "https://api.example.com/health"
@@ -218,7 +221,21 @@ Keys are the long flags' names; the on/off ones are said the positive way. A key
 
 ### Saved tests
 
-A project keeps more than one. `ctrl-s` on the setup screen asks for a name and writes the form as `.pepe/tests/NAME.toml`, the same format as `pepe.toml`, and `pepe --load NAME` runs it again, flags on the command line winning as usual. The files are meant to be committed with the code, so a team shares its tests and CI runs them by name.
+A project keeps more than one. `ctrl-s` on the setup screen asks for a name and writes the form as `.pepe/tests/NAME.toml`, the same format as `pepe.toml`, and `pepe --load NAME` runs it again, flags on the command line winning as usual; the file decides the mode, so a saved ramp runs as a ramp. A ping saves the same way, with a `[ping]` section for its targets, interval and SLO, and `ctrl-s` on its own screen. `--keep NAME` keeps the settings as given on the command line the same way, then runs: `pepe -n 1000 -c 10 https://api.example.com/health --keep api-health`. With `--load` and no name, `--keep` updates the loaded test in place, so `pepe --load api-health -c 20 --keep` keeps the new concurrency; with another name it makes a copy. (`--save FILE` is a ping's, and writes its report.) Once the project has saved tests, `pepe` alone opens on the list of them. The files are meant to be committed with the code, so a team shares its tests and CI runs them by name.
+
+### Recorded runs
+
+A saved test keeps its results too, when asked. `--record` on a run of a saved test writes the report when it ends, as `.pepe/runs/NAME/<moment>.json`; on the dashboard and the ramp screen, `w` does the same once the run has ended. The report carries the test's name and the command that reproduces it, secrets in headers masked, so any recorded run can be run again from the report alone.
+
+```bash
+pepe --load api-health --record            # run it, keep the report
+pepe history                               # every saved test, with its last run
+pepe history api-health                    # its runs, each against the one before
+pepe compare api-health                    # the last two runs, as pepe compare says it
+pepe rerun api-health --gate               # run, record, compare with the run before; exit 1 on a regression
+```
+
+`pepe rerun NAME` is `--load NAME --record` followed by the comparison; with `--json` the comparison is what's printed, the run's own report being on disk. In the library, `h` opens a test's recorded runs, each with what moved since the run before. Everything is plain JSON under `.pepe/runs`, so it can be committed with the tests, or kept out of git with a line in `.gitignore`.
 
 ## Environment
 
@@ -228,7 +245,8 @@ A project keeps more than one. `ctrl-s` on the setup screen asks for a name and 
 | `PEPE_GITHUB_TOKEN` | A GitHub token for `pepe self-update`, for forks or rate-limited CI |
 | `PEPE_CACHE_DIR` | Where the update check keeps its answer (defaults to the OS cache directory) |
 | `NO_COLOR` | Set to anything to draw without colour: selections in reverse video, the heatmap in shades, the verdict uncoloured |
-| `PEPE_THEME` | `light` or `dark`, to match the terminal's background. Unset, pepe reads `COLORFGBG` where the terminal sets it, else assumes dark |
+| `PEPE_THEME` | A [theme](install.md#themes-and-colour) by name: `pepe`, `nord`, `dracula`, `gruvbox`, `tokyo-night`, `catppuccin`, `paper`, `terminal`, `light`, `none`. Unset, the theme saved in the settings, else what `COLORFGBG` and `COLORTERM` say of the terminal |
+| `PEPE_CONFIG_DIR` | Where `settings.toml` is kept (defaults to `~/.config/pepe`) ([Settings](install.md#settings)) |
 | `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` | Proxies, as curl reads them |
 
 ## What pepe measures

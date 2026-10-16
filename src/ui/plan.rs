@@ -4,9 +4,11 @@
 //! the single request that checks new credentials.
 
 use std::cell::Cell;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent,
+};
 use futures::StreamExt;
 use ratatui::{
     backend::CrosstermBackend,
@@ -17,12 +19,13 @@ use ratatui::{
     Frame, Terminal,
 };
 
+use super::kit;
 use super::kit::{
-    about_line, caption, chips, chips_fit, help, marker, pane_title, panel, wrap, TextInput, FAINT,
-    FIELD, SELECTED,
+    about_line, caption, chips, help, marker, pane_title, panel, wrap, TextInput, FAINT, FIELD,
+    SELECTED,
 };
 use super::view::{label, status_color, truncate, value, ACCENT, BAD, GOOD, LABEL, RULE, WARN};
-use super::{body, format, mascot, theme};
+use super::{body, format, mascot, settings, theme};
 use crate::api::ApiRun;
 use crate::load::Plan;
 use crate::openapi::{split_values, AuthKind, Credentials, Endpoint, Field, In, MASK};
@@ -151,6 +154,8 @@ pub struct PlanScreen<'a> {
     auth_declined: bool,
     // Set while drawing, for scrolling and paging
     list_top: Cell<usize>,
+    /// Tells a second click on an endpoint from the first
+    clicks: kit::Clicks,
     list_height: Cell<usize>,
     detail_top: Cell<usize>,
     /// The keys overlay is open
@@ -180,6 +185,7 @@ impl<'a> PlanScreen<'a> {
             auth,
             auth_declined: false,
             list_top: Cell::new(0),
+            clicks: kit::Clicks::default(),
             list_height: Cell::new(10),
             detail_top: Cell::new(0),
             show_help: false,
@@ -449,6 +455,9 @@ impl<'a> PlanScreen<'a> {
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             return Some(Action::Quit);
         }
+        if settings::key(key) {
+            return None;
+        }
         if self.prompt.is_some() {
             return self.prompt_key(key);
         }
@@ -498,6 +507,44 @@ impl<'a> PlanScreen<'a> {
             return None;
         }
         Some(Action::Start)
+    }
+
+    /// A click on an endpoint selects it, a second click is enter on it;
+    /// a key chip presses its key; the wheel moves
+    fn mouse(&mut self, event: MouseEvent, now: Instant) -> Option<Action> {
+        if settings::is_open() {
+            return None;
+        }
+        if self.show_help {
+            if kit::pressed(&event) {
+                self.show_help = false;
+            }
+            return None;
+        }
+        match kit::click(&event)? {
+            kit::Hit::Key(key) => self.key(key),
+            // A parameter in the pane on the right: picked, and a second
+            // click edits it
+            hit @ kit::Hit::Row { list: 1, index } if self.prompt.is_none() => {
+                let endpoint = self.selected()?;
+                let rows = self.detail_rows(endpoint);
+                self.focus = Focus::Detail;
+                self.detail_cursor = index.min(rows.len().saturating_sub(1));
+                if self.clicks.second(hit, now) {
+                    return self.key(KeyEvent::from(KeyCode::Enter));
+                }
+                None
+            }
+            hit @ kit::Hit::Row { index, .. } if self.prompt.is_none() => {
+                self.focus = Focus::List;
+                self.move_to(index);
+                if self.clicks.second(hit, now) {
+                    return self.key(KeyEvent::from(KeyCode::Enter));
+                }
+                None
+            }
+            _ => None,
+        }
     }
 
     fn list_key(&mut self, key: KeyEvent) -> Option<Action> {
@@ -848,8 +895,11 @@ impl<'a> PlanScreen<'a> {
             };
             let action = match event {
                 Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press => self.key(key),
+                Some(Ok(Event::Mouse(mouse))) => self.mouse(mouse, Instant::now()),
                 Some(Ok(Event::Paste(text))) => {
-                    self.paste(&text);
+                    if !settings::paste(&text) {
+                        self.paste(&text);
+                    }
                     None
                 }
                 Some(Ok(_)) => None,
@@ -892,10 +942,7 @@ impl<'a> PlanScreen<'a> {
         self.render_header(f, header, tall, cards);
         self.render_body(f, body);
         self.render_status(f, status);
-        f.render_widget(
-            Paragraph::new(chips_fit(&self.hints(), footer.width)),
-            footer,
-        );
+        kit::footer(f, footer, &self.hints());
         if self.show_help {
             help(
                 f,
@@ -1225,6 +1272,7 @@ impl<'a> PlanScreen<'a> {
             top = cursor + 1 - height;
         }
         self.list_top.set(top);
+        kit::hit_rows(body, 0, top, rows.len().saturating_sub(top));
 
         let shared = shared_prefix(endpoints);
         let lines: Vec<Line> = rows
@@ -1470,6 +1518,7 @@ impl<'a> PlanScreen<'a> {
             top = cursor + 1 - height;
         }
         self.detail_top.set(top);
+        kit::hit_rows(table, 1, top, rows.len().saturating_sub(top));
         let name_width = endpoint
             .fields
             .iter()

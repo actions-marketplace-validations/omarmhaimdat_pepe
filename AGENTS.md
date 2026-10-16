@@ -38,6 +38,10 @@ reason on stderr.
 | `--max-concurrency 64` | `-c` and a ramp's top step must be under it. |
 | `--dry-run` | Says what would be sent, to where and how much (secrets in headers masked), and sends nothing; `--json` gives it as JSON with `"sent": 0`. Use it before the real call when the URL came from input. |
 
+`~/.config/pepe/settings.toml` (the settings page, F2 on a screen) holds
+the same keys under `[defaults]` for every run on the machine, under any
+`pepe.toml`; of two caps, the lower holds.
+
 ```toml
 # pepe.toml, next to the code: holds for every run in that directory
 allow-host = [".staging.example.com", "localhost"]
@@ -45,6 +49,15 @@ max-requests = 10000
 max-rate = 500
 max-concurrency = 64
 ```
+
+A test worth keeping: `--keep NAME` writes the settings as given to
+`.pepe/tests/NAME.toml` next to the code, then runs; `pepe --load NAME`
+runs it again, flags on the command line winning. `--load NAME --keep`
+updates it in place. `--record` keeps the run's report under the test
+(`.pepe/runs/NAME/<moment>.json`); `pepe rerun NAME --json` runs it,
+records it and prints what moved since the run before (`--gate` for
+exit 1 on a regression); `pepe history NAME --json` lists the runs;
+`pepe compare NAME` holds the last two against each other.
 
 ## Diagnose one endpoint
 

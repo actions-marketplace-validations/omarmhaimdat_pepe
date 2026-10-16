@@ -6,6 +6,389 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.42.0](https://github.com/omarmhaimdat/pepe/compare/v0.41.0...v0.42.0) - 2026-10-13
+
+### Added
+
+- *(ui)* themes, and a settings page on every screen that keeps this machine's defaults ([#181](https://github.com/omarmhaimdat/pepe/pull/181))
+
+  ## What
+
+  **Themes.** Seven true colour themes beside `terminal`, `light` and
+  `none`: `pepe`, `nord`, `dracula`, `gruvbox`, `tokyo-night`,
+  `catppuccin`, and `paper` for a light ground. Each is a dozen colours in
+  `src/ui/theme.rs`; the rest of its palette is mixed from those, so the
+  screens still draw in one dark palette and `adjust` repaints the frame.
+
+  **A settings page on every screen.** `F2` opens it over the setup, saved
+  tests, history, API plan, dashboard, ramp, ping and logs screens, and
+  each screen's `?` help lists it.
+
+  - The first line is the theme: `←` `→` step through them and the screen
+  repaints at once.
+  - Below it: the defaults a run starts from (requests, duration,
+  concurrency, timeout, threads, rate, warm-up, user agent, proxy,
+  keep-alive, compression, redirects, TLS verification), a ramp's steps,
+  the guardrails, and whether pepe looks for new releases.
+  - `enter` types a value, which is checked; `del` goes back to pepe's
+  own; `esc` closes. Every change is saved as it's made.
+
+  **Kept on the host.** `~/.config/pepe/settings.toml`
+  (`$XDG_CONFIG_HOME/pepe`, `%APPDATA%\pepe` on Windows, or the directory
+  `PEPE_CONFIG_DIR` names):
+
+  ```toml
+  theme = "nord"
+  update-check = false
+
+  [defaults]             # what a pepe.toml can say, for every run on this machine
+  concurrency = 50
+  max-rate = 500
+  ```
+
+  ## Why
+
+  The theme could only be picked with `PEPE_THEME`, between pepe's palette
+  and the terminal's, and a default could only be changed per directory in
+  a `pepe.toml`.
+
+  ## For the reviewer
+
+  - **Precedence:** flags, then `pepe.toml`, then the settings'
+  `[defaults]`, then pepe's own. The defaults are read when pepe starts,
+  so only the theme changes mid-session.
+  - **Caps:** where a `pepe.toml` and the settings both set
+  `max-requests`, `max-rate` or `max-concurrency`, the lower holds, so a
+  file in a directory can't loosen a machine-wide cap. This is a choice,
+  and the place to push back if the project file should simply win.
+  - **Every mode:** the saved defaults apply with `--json` and under `pepe
+  mcp` too, as a `pepe.toml` does.
+  - **A settings file that doesn't parse** stops pepe with exit 1 and
+  names the file, rather than dropping a cap it holds.
+  - **`PEPE_THEME`** still wins over the saved theme at startup (the page
+  says so when it's set); `NO_COLOR` wins over everything. A theme name
+  this pepe doesn't know is not an error.
+  - **`update-check = false`** also stops the setup screen mentioning a
+  cached newer release.
+  - Where the page covers the mascot, the page shows: the kept pixel-art
+  area is cut around it.
+  - A saved test (`--load`, `pepe rerun`) sits over the defaults like a
+  `pepe.toml`; its mode is read from the test alone, so a `[ramp]` in the
+  settings doesn't make every test a ramp.
+  - While the page is up, the mouse is no screen's.
+  - No `--theme` flag and no `pepe settings` subcommand.
+
+  ## Checked
+
+  - After merging master: `cargo test` (357 pass), `cargo clippy
+  --all-targets -- -D warnings`, `cargo fmt --check`.
+  - `UPDATE_CONTRIB=1 cargo test contrib` for the man page's environment
+  section.
+  - `python3 site/build-docs.py` **not run**: `site/` had unrelated
+  uncommitted changes locally, so the built pages are not in this PR.
+  - By hand, in tmux with `PEPE_CONFIG_DIR` pointed at a scratch
+  directory: opened the page from the setup screen and from a finished
+  dashboard (40 requests at a local `python3 -m http.server`), stepped the
+  themes and read the escape codes for the new palette, typed and cleared
+  defaults, read the file back, and confirmed with `--dry-run` that a
+  saved `concurrency` reaches a run and that `-c` wins over it.
+  - The palettes are held to contrast floors by a test; the shades
+  themselves were not judged by eye in a terminal.
+
+
+## [0.41.0](https://github.com/omarmhaimdat/pepe/compare/v0.40.0...v0.41.0) - 2026-10-13
+
+### Added
+
+- *(ping)* a ping is a saved test too: --keep, --load, --record, ctrl-s and r on its screen ([#179](https://github.com/omarmhaimdat/pepe/pull/179))
+
+  ## What
+
+  A ping is a saved test like the others.
+
+  - The saved-test file gains a `[ping]` section: targets, `every`,
+  `name`, `slo`, `tcp`, `port`, `cmd`, `keep-alive`, `http1`, `ipv4`,
+  `ipv6`, `all-ips`, `interface`. `pepe ping … --keep NAME` writes one;
+  `pepe --load NAME` runs it again, the file deciding the mode, and a ping
+  ends on the file's `-n` where it would otherwise run forever.
+
+    ```
+  $ pepe ping https://api.example.com/health -n 30 --every 2s --slo
+  total=500 --keep prod-health --record --json
+    saved .pepe/tests/prod-health.toml · `pepe --load prod-health` runs it
+  recorded .pepe/runs/prod-health/2026-10-12T23-29-20Z.json · pepe history
+  prod-health
+    ```
+
+  - `--record` keeps the ping's report under the test, and `pepe rerun`,
+  `pepe history NAME` and `pepe compare NAME` work on pings, phase by
+  phase, as `pepe compare` already knew how to read them.
+  - On the ping screen, `ctrl-s` saves the test (offering the first target
+  as the name) and `r` records the pings so far. The footer says where
+  they went.
+  - The library lists a ping with its targets, interval, count or "until
+  stopped", and SLO. A report's `command` renders a ping as a `pepe ping
+  …` line that parses back, several targets included.
+  - A report recorded from a screen right after the test was saved there
+  now names the test explicitly, since the settings were not loaded from
+  the file. The dashboard and the ramp had the same gap.
+
+  The ping and load-test pages document it.
+
+  ## Why
+
+  A ping is the test most worth keeping over time: "prod health, every two
+  seconds, total under 500ms" is what you'd run again next month and hold
+  against today's phases. With v0.40's recorded runs in place, the pieces
+  fit the existing design without new concepts.
+
+  ## Checked
+
+  - `cargo test`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt
+  --check`
+  - `UPDATE_CONTRIB=1 cargo test contrib` and `python3 site/build-docs.py`
+  - Against a local HTTP server: `pepe ping … --keep --record --json`,
+  `--load` running the ping and ending on its count, `--record` twice,
+  `pepe rerun`, `pepe history NAME`, `pepe compare NAME`, the recorded
+  report's `test` and `command`, and `--load … --dry-run` showing the ping
+  as kept.
+
+
+## [0.40.0](https://github.com/omarmhaimdat/pepe/compare/v0.39.1...v0.40.0) - 2026-10-12
+
+### Added
+
+- *(store)* recorded runs: --record, w on the dashboard, pepe history, pepe rerun, pepe compare NAME ([#177](https://github.com/omarmhaimdat/pepe/pull/177))
+
+  ## What
+
+  A saved test keeps its results too, when asked, and pepe can read them
+  back.
+
+  - `--record` on a run of a saved test writes the report when it ends, as
+  `.pepe/runs/NAME/<moment>.json`, in every path: `--json`, headless, the
+  dashboard and the ramp screen. It refuses a run that is not a saved test
+  (`--load NAME`, or `--keep NAME`), and modes other than a run or a ramp.
+  - `w` on the dashboard and the ramp screen records the run once it has
+  ended, with a notice saying where.
+  - Every report carries `test` and `command`, the command with header
+  secrets masked, so a recorded run can be run again from the file alone.
+  Both JSON schemas gained the two fields.
+
+    ```
+  $ pepe -n 1000 -c 10 https://api.example.com/health --keep api-health
+  --record --json
+    saved .pepe/tests/api-health.toml · `pepe --load api-health` runs it
+  recorded .pepe/runs/api-health/2026-10-12T22-55-04Z.json · pepe history
+  api-health
+    ```
+
+  - `pepe history` lists the saved tests with their run counts and last
+  run; `pepe history NAME` lists a test's runs, each against the one
+  before. Both take `--json`.
+  - `pepe rerun NAME` is `--load NAME --record` followed by the comparison
+  with the previous run; with `--json` the comparison is what gets
+  printed, the run's own report being on disk; `--gate` exits 1 on a
+  regression.
+  - `pepe compare NAME` holds a test's last two recorded runs against each
+  other. Two runs recorded in the same second are told apart and kept in
+  order.
+  - In the library, each test shows its last run (rps, p99, failures, age)
+  when the terminal is wide enough, and `h` opens its history: the runs
+  newest first, with a card saying what moved since the run before. Mouse
+  and wheel work there as everywhere.
+  - The plan screen's parameters pane takes clicks: one picks a parameter,
+  a second edits it.
+
+  The reference, completions and man pages know the two commands and the
+  flag; the load-test, compare, dashboard and agents pages document them.
+
+  ## Why
+
+  v0.37 to v0.39 gave pepe saved tests, a library to pick from, and a way
+  to keep any run. The payoff of the store is results next to the test
+  they came from: a trend over time instead of two files on a desk, and
+  "did my change regress" as one command that CI can gate on. The report
+  carrying its own invocation means no result is ever an orphan.
+
+  ## Checked
+
+  - `cargo test`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt
+  --check`
+  - `UPDATE_CONTRIB=1 cargo test contrib` and `python3 site/build-docs.py`
+  - Against a local HTTP server: `--keep … --record --json` (report
+  carries `test` and the masked command), a headless `--load … --record`,
+  `pepe history` in both forms and as JSON, `pepe compare NAME`, `pepe
+  rerun NAME` as text and as JSON, the refusals for an unsaved run and an
+  unknown name, and two runs in one second kept in order.
+
+
+## [0.39.1](https://github.com/omarmhaimdat/pepe/compare/v0.39.0...v0.39.1) - 2026-10-12
+
+### Fixed
+
+- *(dashboard)* the filter bar over the requests is clickable, part by part ([#174](https://github.com/omarmhaimdat/pepe/pull/174))
+
+  ## What
+
+  The requests tab's filter bar, the line with STATUS, LATENCY and SEARCH
+  over the table, takes the mouse like the rest of the dashboard:
+
+  - a group's name or its key letter (`f`, `l`, `/`) presses that key, so
+  STATUS cycles the status filter and SEARCH opens the search for typing;
+  - a status or a latency choice sets that filter outright, rather than
+  cycling to it;
+  - the ENDPOINT chip, when an endpoint filter is on, lets it go.
+
+  ## Why
+
+  v0.38.0 made every screen clickable through regions registered as they
+  are drawn. The filter bar drew its hints and choices as plain text and
+  registered nothing, so the three controls a user reaches for most on
+  that tab were the ones that took no click.
+
+  ## Checked
+
+  - `cargo test`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt
+  --check`
+  - `python3 site/build-docs.py`
+  - A test renders the requests tab, clicks each part and checks the
+  filter it sets, then checks the regions are gone on another tab.
+
+
+## [0.39.0](https://github.com/omarmhaimdat/pepe/compare/v0.38.0...v0.39.0) - 2026-10-12
+
+### Added
+
+- *(setup)* any run is kept, updated or copied: --keep, ctrl-s on the dashboard and ramp, c in the library ([#173](https://github.com/omarmhaimdat/pepe/pull/173))
+
+  ## What
+
+  Any run can be kept as a saved test, updated in place, or copied: from
+  the command line and from every screen that runs one.
+
+  - `pepe -n 1000 -c 10 https://example.com --keep NAME` writes the
+  settings as given to `.pepe/tests/NAME.toml`, says so on stderr, then
+  runs. With `--load` and no name, `--keep` updates the loaded test in
+  place, so `pepe --load api-health -c 20 --keep` keeps the new
+  concurrency; with another name it copies it. A curl command is kept too,
+  body included. Ping, flow, replay and the rest refuse with exit code 2,
+  since a saved test is a load test.
+
+    ```
+    $ pepe -n 1000 -c 10 https://api.example.com/health --keep api-health
+    saved .pepe/tests/api-health.toml · `pepe --load api-health` runs it
+    ```
+
+  - `ctrl-s` on the dashboard and the ramp screen saves the run's settings
+  the same way, with the concurrency as dialed in with `+` and `-`. A run
+  started from a saved test offers its own name, so enter updates it
+  without asking; another name makes a copy; a taken name asks once. The
+  result shows as a notice in the footer.
+  - `c` in the library copies the selected test under another name,
+  offering `NAME-copy`, and selects the new file.
+  - One "save as" prompt now serves the setup form, the dashboard, the
+  ramp and the library.
+
+  The flag is `--keep` rather than `--save` because `pepe ping --save
+  FILE` already writes a report and a global flag reaches every
+  subcommand, so `--save` stays the word for reports. The reference,
+  completions and man page know `--keep`; the load-test, dashboard and
+  agents pages document it.
+
+  ## Why
+
+  v0.37.0 saved a test from the setup form and v0.38.0 gave the saved
+  tests a library. A run worked out on the command line, or dialed in on
+  the dashboard, deserves keeping just as much, and a saved test has to be
+  updatable and copyable without going through the form.
+
+  ## Checked
+
+  - `cargo test`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt
+  --check`
+  - `UPDATE_CONTRIB=1 cargo test contrib` and `python3 site/build-docs.py`
+  - By hand from a scratch directory: `--keep` of a run, an update in
+  place with `--load … --keep`, a copy under another name, a ramp kept as
+  a ramp, a curl command kept with its body, and the refusals for a
+  missing name, nothing to keep, and a ping; `pepe ping --save` still
+  takes its file.
+
+
+## [0.38.0](https://github.com/omarmhaimdat/pepe/compare/v0.37.0...v0.38.0) - 2026-10-12
+
+### Added
+
+- *(setup)* a library of the saved tests to pick from, and the mouse on every screen ([#171](https://github.com/omarmhaimdat/pepe/pull/171))
+
+  ## What
+
+  The second step of the saved tests that v0.37.0 began.
+
+  - With saved tests in the project, `pepe` alone opens on the library:
+  each test with its mode, target, load and age, and the command it runs
+  as. Enter puts one in the setup form, where it can still be changed
+  before the start; `n` starts from an empty form; `ctrl-o` on the form
+  goes back to the library. A file that doesn't read is listed with its
+  error rather than hidden.
+  - A saved test's file decides the mode when the command line names none,
+  so `pepe --load my-ramp` runs the ramp and the library opens a ramp into
+  the ramp form. A typed mode still wins.
+  - Every screen takes the mouse: a click on a row selects it and a second
+  click opens it, a tab shows it, a key chip in the footer presses its
+  key, and the wheel scrolls. Screens register what they draw as clickable
+  regions and look a click up against them, so what is clickable is
+  exactly what is on screen. Mouse capture is on for the whole session and
+  off again on every way out. The keyboard stays the primary path; with
+  the mouse captured, selecting text in the terminal needs shift held.
+
+  The load-test and dashboard pages document the library and the mouse.
+
+  ## Why
+
+  Saving tests under names is only half of it: there has to be a place to
+  see them and pick one, and a list to pick from has to be clickable. A
+  mouse that works on one screen only is a surprise, so it works on all of
+  them, through one shared mechanism rather than seven.
+
+  ## Checked
+
+  - `cargo test`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt
+  --check`
+  - `python3 site/build-docs.py` (no flag changed, so the completions and
+  man page are as they were)
+  - By hand from a scratch directory with four saved tests, one of them
+  broken: the library at 80 and 170 columns, clicks and a double click on
+  its rows, and `--load` of a saved ramp running as a ramp with `--dry-run
+  --json`.
+
+
+
+### Other
+
+- *(nix)* update flake.lock ([#170](https://github.com/omarmhaimdat/pepe/pull/170))
+
+  Automated changes by the
+  [update-flake-lock](https://github.com/DeterminateSystems/update-flake-lock)
+  GitHub Action.
+
+  ```
+  Flake lock file updates:
+
+  • Updated input 'nixpkgs':
+      'github:NixOS/nixpkgs/a7868a727837f3c09cee2ce0ca671c76b1589fed?narHash=sha256-KgItSKML8Xvte0B7/uGnBDsYzSnnKHcOaiUbgWBXLXw%3D' (2026-10-03)
+    → 'github:NixOS/nixpkgs/6510408d147d8c5e6d76043e899e9251756f6a75?narHash=sha256-XK4KceonkwD8LuMAt/vNrz982mXJM5jeHAxMwsUXXAQ%3D' (2026-10-10)
+  ```
+
+  ### Running GitHub Actions on this PR
+
+  GitHub Actions will not run workflows on pull requests which are opened
+  by a GitHub Action.
+
+  **To run GitHub Actions workflows on this PR, close and re-open this
+  pull request.**
+
+
 ## [0.37.0](https://github.com/omarmhaimdat/pepe/compare/v0.36.1...v0.37.0) - 2026-10-12
 
 ### Added

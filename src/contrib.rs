@@ -106,7 +106,7 @@ const PING_KEYS: [(&str, &str); 9] = [
     ("?", "Show all keys"),
 ];
 
-const ENVIRONMENT: [(&str, &str); 4] = [
+const ENVIRONMENT: [(&str, &str); 5] = [
     (
         "PEPE_NO_UPDATE_CHECK",
         "Set to anything to skip the look for a newer release",
@@ -121,7 +121,11 @@ const ENVIRONMENT: [(&str, &str); 4] = [
     ),
     (
         "PEPE_THEME",
-        "light or dark, for the terminal's background; otherwise COLORFGBG decides",
+        "A theme by name (pepe, nord, dracula, gruvbox, tokyo-night, catppuccin, paper, terminal, light, none); otherwise the one saved in the settings (F2 on any screen), or what the terminal suggests",
+    ),
+    (
+        "PEPE_CONFIG_DIR",
+        "Where settings.toml is kept: the theme and this machine's defaults (~/.config/pepe otherwise)",
     ),
 ];
 
@@ -225,7 +229,7 @@ fn main_page() -> String {
 }
 
 /// Each subcommand's page: (subcommand, page name, how it's typed)
-const SUBCOMMANDS: [(&str, &str, &str); 11] = [
+const SUBCOMMANDS: [(&str, &str, &str); 13] = [
     ("ping", "pepe-ping", "pepe ping"),
     ("ramp", "pepe-ramp", "pepe ramp"),
     ("compare", "pepe-compare", "pepe compare"),
@@ -233,6 +237,8 @@ const SUBCOMMANDS: [(&str, &str, &str); 11] = [
     ("flow", "pepe-flow", "pepe flow"),
     ("replay", "pepe-replay", "pepe replay"),
     ("logs", "pepe-logs", "pepe logs"),
+    ("rerun", "pepe-rerun", "pepe rerun"),
+    ("history", "pepe-history", "pepe history"),
     ("schema", "pepe-schema", "pepe schema"),
     ("mcp", "pepe-mcp", "pepe mcp"),
     ("self-update", "pepe-self-update", "pepe self-update"),

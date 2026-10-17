@@ -6,6 +6,217 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.43.0](https://github.com/omarmhaimdat/pepe/compare/v0.42.2...v0.43.0) - 2026-10-16
+
+### Added
+
+- *(agents)* --otlp says which operation inside the service the time went to, and the loop to make it faster ([#189](https://github.com/omarmhaimdat/pepe/pull/189))
+
+  ## Why
+
+  Every load tool, pepe included, stops at "p99 is 480 ms". The next
+  question is always which part of the code that is, and answering it
+  means leaving the tool. This PR answers it in the same command, and
+  gives an agent a loop it can close on its own: measure, find the slow
+  operation, change the code, measure again, compare.
+
+  ## What it does
+
+  **`--otlp :4318`** (plain runs for now)
+  - Each request carries a `traceparent` of pepe's making. The run id is
+  the trace id's high half and the request number, mixed, is the low half.
+  The sampled flag is set, so a parent-based sampler keeps every request.
+  - pepe runs an OTLP/HTTP receiver at `/v1/traces` that takes protobuf or
+  JSON. The protobuf reader is about 150 lines, hand-written, so there's
+  no new dependency. It keeps only spans from its own traces.
+  - `/v1/metrics` and `/v1/logs` get a 200 and are ignored. Gzip gets a
+  415, and the verdict says to set `OTEL_EXPORTER_OTLP_COMPRESSION=none`.
+  - When the run ends, pepe waits for the exporters' last batch. It stops
+  early once every request that got a response has its root span, and
+  gives up after 15 s at most.
+  - `spans` in the report: coverage, the server's own time (median, p90,
+  p99), and `operations[]`. Each operation has calls per request, median
+  and p99 call time, `share_percent` (its own time, less its children's,
+  over all requests) and `slowest_share_percent` (the same over requests
+  at or above the server's p99).
+  - `summary.slowest_requests[]` gains `trace_id`, `server_ms` and `spent`
+  (the top 3 operations).
+  - Verdict findings: where the time went; an operation that's small at
+  the median but large in the tail (it waits on a lock, a pool or a
+  queue); the gap between pepe's latency and the server's own time; and
+  what to set when no spans arrive.
+  - The text report (headless, or after the dashboard closes) prints a
+  "Where the server's time went" table.
+
+  **`pepe compare`**: two reports with spans give `operations[]` (each
+  operation before and after) and a finding for each one that moved. The
+  verdict still comes from pepe's own measurements.
+
+  **MCP**
+  - `run` takes `otlp`.
+  - `run`, `ping`, `ramp`, `api`, `flow` and `replay` take `save`, so an
+  agent has a file to pass to `compare`.
+  - A `speed-up` prompt (`/pepe:speed-up URL [goal]` in Claude Code) walks
+  the loop.
+  - Every tool has annotations: `compare` is read-only and the others
+  reach outside the machine.
+  - The server instructions now lead with the tasks pepe is for. They load
+  at session start, while tool definitions may only be looked up later.
+
+  **Discoverability**
+  - The skill's description puts its trigger words first ("slow",
+  "faster", "benchmark", "OpenTelemetry"), since that text is what Claude
+  and Codex match on. It also has a section on the loop.
+  - Codex: a root `plugin.json` and `mcp.json` (the portable format
+  OpenAI's docs describe), plus `.agents/plugins/marketplace.json`. Codex
+  also reads `.claude-plugin/marketplace.json` as a legacy marketplace.
+  - The docs now cover `codex mcp add`, `~/.codex/config.toml`, a Cursor
+  install link, and `npx skills add omarmhaimdat/pepe`.
+  - `AGENTS.md`, `llms.txt` and the Claude plugin manifests mention the
+  loop.
+  - This PR includes the marketplace `source` fix from
+  omarmhaimdat/pepe#188 (same lines), so it works whichever merges first.
+
+  ## Tested
+
+  - **End to end against a real service**: a Python service instrumented
+  with the official OpenTelemetry SDK (1.45.1, http/protobuf exporter).
+  Its `/checkout` makes a cache read and a query that holds a lock.
+  - 2,000 requests at 16 concurrent: 100% coverage. `SELECT orders` was
+  98% of the slowest requests' server time, and the slowest requests'
+  `spent` agreed.
+  - With the lock removed: `pepe compare` said "SELECT orders down 95%:
+  47.74ms → 2.57ms a call". It also showed the bottleneck *moving* to the
+  cache read, which is real: at 1.6k req/s the Python service is
+  GIL-bound.
+  - The same loop through `pepe mcp` (guardrails `--allow-host 127.0.0.1
+  --max-requests 5000`, then `run` with `otlp` and `save`).
+  - JSON export accepted, gzip refused with the message, metrics and logs
+  answered.
+  - **Unit tests**: the breakdown (shares, tail, self time with
+  overlapping children, warm-up excluded), the protobuf reader, requests
+  framed by length and by chunks, compare by operation, MCP
+  prompt/`save`/annotations, schema fit. `cargo +1.98 test`: 367 passed.
+  `clippy -D warnings` passes on 1.98.
+  - **Performance**: `bench/compare.sh master branch 3`, with `--otlp`
+  off. Results below; no regression.
+
+  | Workload | CPU ms/1k, master | branch | Peak MB, master | branch |
+  |---|---|---|---|---|
+  | tiny-c64 | 5.55 | 5.45 | 10.1 | 10.2 |
+  | body16k-c64 | 6.40 | 6.40 | 10.0 | 10.0 |
+  | slow20ms-c1000 | 6.80 | 7.00 | 13.1 | 13.0 |
+  | tls-c64 | 5.90 | 5.90 | 13.6 | 13.2 |
+
+  ## Not verified
+  - **Codex**: Codex isn't installed here, so the plugin files follow
+  OpenAI's documentation but haven't been loaded by Codex. The MCP and
+  AGENTS.md routes are standard.
+  - **Cursor**: the install link hasn't been clicked.
+
+  ## For 1.0
+  This adds a flag (`--otlp`), report fields (`spans`, and the new
+  `slowest_requests` fields), a compare field (`operations`), MCP inputs
+  (`otlp`, `save`) and a prompt. All of them are additions, and `schema/`
+  is updated, but per ROADMAP.md they restart the month-without-changes
+  clock.
+
+
+## [0.42.2](https://github.com/omarmhaimdat/pepe/compare/v0.42.1...v0.42.2) - 2026-10-16
+
+### Fixed
+
+- *(agents)* the plugin marketplace is one Claude Code takes ([#188](https://github.com/omarmhaimdat/pepe/pull/188))
+
+  ## What was wrong
+
+  The install line in the docs fails on master:
+
+  ```
+  $ claude plugin marketplace add omarmhaimdat/pepe
+  ✘ Failed to add marketplace: … marketplace.json: Invalid schema: … plugins.0.source: Invalid input
+  ```
+
+  Claude Code wants a plugin's `source` to be a path that starts with
+  `./`, and ours was `"."`. Since the marketplace can't be added, `claude
+  plugin install pepe@pepe` fails too. I checked it with Claude Code
+  2.1.63, adding a checkout of master as a marketplace under a throwaway
+  `HOME`.
+
+  ## The fix
+
+  - `"source": "./"`. `claude plugin validate .` passes now, and the same
+  throwaway-`HOME` test adds the marketplace and installs `pepe@pepe`.
+  - `metadata.description` on the marketplace, which the validator asks
+  for.
+  - A test (`the_plugin_marketplace_is_one_claude_code_takes`) that holds
+  every plugin source to `./`, so this can't come back unnoticed.
+
+  It's separate from the agent-loop PR so it can ship on its own as a
+  patch release.
+
+
+## [0.42.1](https://github.com/omarmhaimdat/pepe/compare/v0.42.0...v0.42.1) - 2026-10-15
+
+### Fixed
+
+- *(deps)* bump toml from 0.9.6 to 1.1.8+spec-1.1.0 ([#183](https://github.com/omarmhaimdat/pepe/pull/183))
+
+  Bumps [toml](https://github.com/toml-rs/toml) from 0.9.6 to
+  1.1.8+spec-1.1.0.
+  <details>
+  <summary>Commits</summary>
+  <ul>
+  <li><a
+  href="https://github.com/toml-rs/toml/commit/ceac6e4412420d5a5c19e4f7293ad005cf1a31b2"><code>ceac6e4</code></a>
+  chore: Release</li>
+  <li><a
+  href="https://github.com/toml-rs/toml/commit/0fe9e93d6d6299400e168681f7cdd7515c0693d2"><code>0fe9e93</code></a>
+  docs: Update changelog</li>
+  <li><a
+  href="https://github.com/toml-rs/toml/commit/e3a64aa201ec339abacb570417d75b327490cab4"><code>e3a64aa</code></a>
+  fix(display): Ensure all keys are encoded (<a
+  href="https://redirect.github.com/toml-rs/toml/issues/1245">#1245</a>)</li>
+  <li><a
+  href="https://github.com/toml-rs/toml/commit/76484d005a0e68e8c1876f8a3417b71a3921623f"><code>76484d0</code></a>
+  fix(display): Ensure all keys are encoded</li>
+  <li><a
+  href="https://github.com/toml-rs/toml/commit/711b1ba1ecb11e61df9a1609e24fa3b17d11d961"><code>711b1ba</code></a>
+  refactor(display): Clarify that we are working with encoded keys</li>
+  <li><a
+  href="https://github.com/toml-rs/toml/commit/4f73ebdc8bd7fdf0e6bd379baeb96dedcee6bb2b"><code>4f73ebd</code></a>
+  test(display): Reproduce the key bug</li>
+  <li><a
+  href="https://github.com/toml-rs/toml/commit/6c6a5cdcdc4d9beb16ff9bdf2dcbf360fc2bc84e"><code>6c6a5cd</code></a>
+  fix(parser): Remove risk of unsoundness with synthetic parser events and
+  'uns...</li>
+  <li><a
+  href="https://github.com/toml-rs/toml/commit/9c5e95d8d67514f2191afbee137ba40e85e4f441"><code>9c5e95d</code></a>
+  fix(parser): Remove risk of unsoundness with synthetic parser events and
+  'uns...</li>
+  <li><a
+  href="https://github.com/toml-rs/toml/commit/4d45944be2f6ee3b938dbba3d64a6d9c280bd9e9"><code>4d45944</code></a>
+  perf(parser): Remove no-op code (<a
+  href="https://redirect.github.com/toml-rs/toml/issues/1243">#1243</a>)</li>
+  <li><a
+  href="https://github.com/toml-rs/toml/commit/189c91c3d06a0f56e18f85cb00d3425534defd71"><code>189c91c</code></a>
+  perf(parser): Remove no-op code</li>
+  <li>Additional commits viewable in <a
+  href="https://github.com/toml-rs/toml/compare/toml-v0.9.6...toml-v1.1.8">compare
+  view</a></li>
+  </ul>
+  </details>
+  <br />
+
+
+  [![Dependabot compatibility
+  score](https://dependabot-badges.githubapp.com/badges/compatibility_score?dependency-name=toml&package-manager=cargo&previous-version=0.9.6&new-version=1.1.8+spec-1.1.0)](https://docs.github.com/en/github/managing-security-vulnerabilities/about-dependabot-security-updates#about-compatibility-scores)
+
+  Dependabot will resolve any conflicts with this PR as long as you don't
+  alter it yourself. You can also trigger a rebase manually by commenting
+  `@dependabot rebase`.
+
+
 ## [0.42.0](https://github.com/omarmhaimdat/pepe/compare/v0.41.0...v0.42.0) - 2026-10-13
 
 ### Added

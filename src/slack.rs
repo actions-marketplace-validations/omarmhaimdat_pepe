@@ -16,6 +16,11 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+mod serve;
+mod wizard;
+
+pub use serve::run as serve;
+
 /// The environment variable that holds a token, over the file
 pub const TOKEN_ENV: &str = "PEPE_SLACK_TOKEN";
 /// Where Slack's Web API is; tests point it at a server of their own
@@ -37,6 +42,31 @@ pub struct Connection {
     pub channel: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel_id: Option<String>,
+    /// The app-level token (xapp-…) `pepe slack serve` listens with, for
+    /// the buttons and /pepe
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_token: Option<String>,
+    /// Who may press them: Slack user ids, or `*` for anyone in the channel
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allow: Vec<String>,
+    /// The same, as names to show
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allow_names: Vec<String>,
+}
+
+/// The app-level token, over the file's: as in CI
+pub const APP_TOKEN_ENV: &str = "PEPE_SLACK_APP_TOKEN";
+/// Set by `pepe slack serve` on the runs it starts: the run's id, for its
+/// Stop button, and who asked for it
+pub const RUN_ENV: &str = "PEPE_SLACK_RUN";
+pub const BY_ENV: &str = "PEPE_SLACK_BY";
+
+/// The app-level token: `PEPE_SLACK_APP_TOKEN`, else the file's
+pub fn app_token() -> Option<String> {
+    std::env::var(APP_TOKEN_ENV)
+        .ok()
+        .filter(|t| !t.trim().is_empty())
+        .or_else(|| load().and_then(|c| c.app_token))
 }
 
 /// `slack.toml`, beside the settings
@@ -102,16 +132,23 @@ pub fn manifest() -> Value {
             "background_color": "#121010"
         },
         "features": {
-            "bot_user": {"display_name": "pepe", "always_online": false}
+            "bot_user": {"display_name": "pepe", "always_online": false},
+            "slash_commands": [{
+                "command": "/pepe",
+                "description": "Run the saved load tests pepe slack serve has",
+                "usage_hint": "run checkout · stop · history checkout · list",
+                "should_escape": false
+            }]
         },
         "oauth_config": {
             "scopes": {
-                "bot": ["chat:write", "chat:write.public", "channels:read", "channels:join", "groups:read"]
+                "bot": ["chat:write", "chat:write.public", "chat:write.customize", "channels:read", "channels:join", "groups:read", "commands", "users:read"]
             }
         },
         "settings": {
+            "interactivity": {"is_enabled": true},
             "org_deploy_enabled": false,
-            "socket_mode_enabled": false,
+            "socket_mode_enabled": true,
             "token_rotation_enabled": false
         }
     })
@@ -239,6 +276,16 @@ impl Live {
         }
     }
 
+    /// The message, once posted
+    pub fn ts(&self) -> Option<&str> {
+        self.ts.as_deref()
+    }
+
+    /// The channel, by the id Slack answered with once it did
+    pub fn channel(&self) -> &str {
+        &self.channel
+    }
+
     /// Post, joining a public channel first when pepe isn't in it yet
     async fn post(&mut self, args: &[(&str, String)]) -> Result<Value, String> {
         let mut all = vec![("channel", self.channel.clone())];
@@ -255,24 +302,33 @@ impl Live {
         }
     }
 
-    /// The message as `payload` ({text, blocks}) says: posted the first
-    /// time, edited in place after
+    /// The message as `payload` says ({text, and blocks or attachments,
+    /// and an icon_url for Pepe's face}): posted the first time, edited in
+    /// place after. Slack keeps a message's face from when it was posted.
     pub async fn show(&mut self, payload: &Value) -> Result<(), String> {
-        let args = [
+        let mut args = vec![
             (
                 "text",
                 payload["text"].as_str().unwrap_or_default().to_string(),
             ),
-            ("blocks", payload["blocks"].to_string()),
             ("unfurl_links", "false".to_string()),
         ];
+        for key in ["blocks", "attachments"] {
+            if payload[key].is_array() {
+                args.push((key, payload[key].to_string()));
+            }
+        }
         match &self.ts {
             Some(ts) => {
                 let mut all = vec![("channel", self.channel.clone()), ("ts", ts.clone())];
-                all.extend(args.iter().cloned());
+                all.extend(args);
                 self.api.call("chat.update", &all).await?;
             }
             None => {
+                args.push(("username", "pepe".into()));
+                if let Some(icon) = payload["icon_url"].as_str() {
+                    args.push(("icon_url", icon.to_string()));
+                }
                 let answer = self.post(&args).await?;
                 self.ts = answer["ts"].as_str().map(str::to_string);
                 if let Some(id) = answer["channel"].as_str() {
@@ -283,10 +339,18 @@ impl Live {
         Ok(())
     }
 
-    /// A line in the message's thread; `broadcast` shows it in the
-    /// channel too, which is what makes a mention there notify
-    pub async fn reply(&mut self, text: &str, broadcast: bool) -> Result<(), String> {
-        let mut args = vec![("text", text.to_string())];
+    /// A line in the message's thread, with Pepe's `icon`; `broadcast`
+    /// shows it in the channel too, which is what makes a mention notify
+    pub async fn reply(
+        &mut self,
+        text: &str,
+        broadcast: bool,
+        icon: Option<&str>,
+    ) -> Result<(), String> {
+        let mut args = vec![("text", text.to_string()), ("username", "pepe".into())];
+        if let Some(icon) = icon {
+            args.push(("icon_url", icon.to_string()));
+        }
         if let Some(ts) = &self.ts {
             args.push(("thread_ts", ts.clone()));
             if broadcast {
@@ -300,18 +364,15 @@ impl Live {
         Ok(())
     }
 
-    /// The run's end: the message becomes the verdict, once
-    pub async fn end(&mut self, payload: &Value, mention: Option<&str>) -> Result<(), String> {
+    /// The run's end, once: the message becomes the verdict, and `line`
+    /// goes under it, shown in the channel, with the face of the outcome
+    pub async fn end(&mut self, payload: &Value, line: &str, icon: &str) -> Result<(), String> {
         if self.ended {
             return Ok(());
         }
         self.ended = true;
         self.show(payload).await?;
-        if let Some(mention) = mention {
-            let status = payload["blocks"][1]["text"]["text"].as_str().unwrap_or("");
-            self.reply(&format!("{mention} {status}"), true).await?;
-        }
-        Ok(())
+        self.reply(line, true, Some(icon)).await
     }
 }
 
@@ -400,8 +461,19 @@ pub fn open_browser(url: &str) -> bool {
     command.is_ok_and(|s| s.success())
 }
 
-/// The workspace's channels pepe can post in, by name
-async fn channels(api: &Api) -> Result<Vec<(String, String, bool)>, String> {
+/// A channel pepe can see
+#[derive(Debug, Clone, PartialEq)]
+pub struct Channel {
+    pub name: String,
+    pub id: String,
+    pub private: bool,
+    pub members: u64,
+    /// pepe is in it already
+    pub joined: bool,
+}
+
+/// The workspace's channels pepe can post in, the busiest first
+pub async fn channels(api: &Api) -> Result<Vec<Channel>, String> {
     let mut out = Vec::new();
     let mut cursor = String::new();
     for _ in 0..10 {
@@ -416,7 +488,13 @@ async fn channels(api: &Api) -> Result<Vec<(String, String, bool)>, String> {
         let page = api.call("conversations.list", &args).await?;
         for c in page["channels"].as_array().into_iter().flatten() {
             if let (Some(id), Some(name)) = (c["id"].as_str(), c["name"].as_str()) {
-                out.push((name.to_string(), id.to_string(), c["is_private"] == true));
+                out.push(Channel {
+                    name: name.to_string(),
+                    id: id.to_string(),
+                    private: c["is_private"] == true,
+                    members: c["num_members"].as_u64().unwrap_or(0),
+                    joined: c["is_member"] == true,
+                });
             }
         }
         cursor = page["response_metadata"]["next_cursor"]
@@ -427,115 +505,90 @@ async fn channels(api: &Api) -> Result<Vec<(String, String, bool)>, String> {
             break;
         }
     }
-    out.sort();
+    out.sort_by(|a, b| b.members.cmp(&a.members).then(a.name.cmp(&b.name)));
     Ok(out)
+}
+
+/// The channels `text` could mean: the one it names exactly, else those
+/// with it in their name
+pub fn matching<'a>(all: &'a [Channel], text: &str) -> Vec<&'a Channel> {
+    let text = text.trim().trim_start_matches('#').to_lowercase();
+    if text.is_empty() {
+        return all.iter().collect();
+    }
+    if let Some(exact) = all
+        .iter()
+        .find(|c| c.name == text || c.id.to_lowercase() == text)
+    {
+        return vec![exact];
+    }
+    all.iter().filter(|c| c.name.contains(&text)).collect()
 }
 
 /// Ask which channel, by name or part of it; `given` answers without asking
 async fn pick_channel(api: &Api, given: Option<&str>) -> Result<(String, String), String> {
     let all = channels(api).await?;
-    let find = |text: &str| -> Vec<&(String, String, bool)> {
-        let text = text.trim().trim_start_matches('#').to_lowercase();
-        if let Some(exact) = all
-            .iter()
-            .find(|(name, id, _)| *name == text || id.to_lowercase() == text)
-        {
-            return vec![exact];
-        }
-        all.iter()
-            .filter(|(name, _, _)| name.contains(&text))
-            .collect()
+    let names = |many: &[&Channel]| {
+        many.iter()
+            .take(5)
+            .map(|c| format!("#{}", c.name))
+            .collect::<Vec<_>>()
+            .join(", ")
     };
     if let Some(given) = given {
-        return match find(given).as_slice() {
-            [(name, id, _)] => Ok((name.clone(), id.clone())),
+        return match matching(&all, given).as_slice() {
+            [c] => Ok((c.name.clone(), c.id.clone())),
             [] => Err(format!(
                 "no channel {given} that pepe can see: a private one needs /invite @pepe first"
             )),
-            many => Err(format!(
-                "{given} could be {}",
-                many.iter()
-                    .take(5)
-                    .map(|c| format!("#{}", c.0))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )),
+            many => Err(format!("{given} could be {}", names(many))),
         };
     }
     if all.is_empty() {
         return Err("pepe can't see any channel yet".into());
     }
-    let shown: Vec<String> = all.iter().take(12).map(|c| format!("#{}", c.0)).collect();
     say(&format!(
-        "  Channels: {}{}",
-        shown.join("  "),
-        if all.len() > shown.len() {
-            format!("  … and {} more", all.len() - shown.len())
-        } else {
-            String::new()
-        }
+        "  Channels: {}",
+        names(&all.iter().collect::<Vec<_>>())
     ));
     loop {
         let answer = ask("  Which channel? (a name, or part of one) › ")?;
-        if answer.is_empty() {
-            continue;
-        }
-        match find(&answer).as_slice() {
-            [(name, id, _)] => return Ok((name.clone(), id.clone())),
+        match matching(&all, &answer).as_slice() {
+            [c] => return Ok((c.name.clone(), c.id.clone())),
             [] => say("  No channel by that name pepe can see. A private one needs /invite @pepe in it first."),
-            many => say(&format!(
-                "  That could be {}: say more",
-                many.iter().take(8).map(|c| format!("#{}", c.0)).collect::<Vec<_>>().join(", ")
-            )),
+            many => say(&format!("  That could be {}: say more", names(many))),
         }
     }
 }
 
 /// `pepe slack connect`: from nothing to a test message in the channel
 pub async fn connect(token: Option<String>, channel: Option<String>) -> Result<(), String> {
-    say("Connecting pepe to Slack. Nothing is hosted: the app is yours, in your workspace.\n");
-    let token = match token.or_else(|| std::env::var(TOKEN_ENV).ok()) {
+    let token = token.or_else(|| std::env::var(TOKEN_ENV).ok());
+    let terminal = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
+    if terminal && token.is_none() && channel.is_none() {
+        let finished = wizard::run(&manifest_link()).await?;
+        done(&finished);
+        return Ok(());
+    }
+    // Told what to use, or no one to ask: a line at a time
+    let token = match token {
         Some(token) => token,
         None => {
             let link = manifest_link();
-            say("1. Make the app. Slack's page opens with everything filled in:");
-            if open_browser(&link) {
-                say("   (opened in your browser; if it didn't, open this link)");
-            }
-            say(&format!("   {link}\n"));
-            say("   Pick your workspace, then Next and Create.");
-            say(
-                "   (If the page asks for a manifest instead, choose \"From a manifest\" and paste",
-            );
-            say("   what `pepe slack manifest` prints.)\n");
-            say("2. Install it: \"Install to Workspace\", then Allow.\n");
-            say("3. Copy the \"Bot User OAuth Token\" it shows under OAuth & Permissions (xoxb-…).\n");
-            let token = ask_secret("   Paste it here › ")?;
-            say("");
-            token
+            say("1. Make the app: Slack's page, everything filled in");
+            open_browser(&link);
+            say(&format!("   {link}"));
+            say("   Pick the workspace, Create, then Install to Workspace and Allow.");
+            say("2. Copy the Bot User OAuth Token (xoxb-…), under OAuth & Permissions.");
+            ask_secret("   Paste it here › ")?
         }
     };
     let (team, url) = check(&token).await?;
-    say(&format!("✓ Connected to {team} {url}"));
+    say(&format!("✓ {team} · {}", url.trim_end_matches('/')));
     let api = Api::new(&token);
     let (name, id) = pick_channel(&api, channel.as_deref()).await?;
-    let path = finish(&token, &team, &url, &name, &id).await?;
-    say(&format!(
-        "✓ pepe is in #{name} and posted a test message there"
-    ));
-    say(&format!(
-        "✓ Kept in {} (readable by you alone)\n",
-        path.display()
-    ));
-    say("Use it:");
-    say(&format!(
-        "  pepe --slack -z 30s https://api.example.com/health   # posts in #{name}"
-    ));
-    say("  pepe --slack=#another …                                 # somewhere else");
-    say("  webhook = \"slack:\"                                      # in a pepe.toml");
-    say(&format!(
-        "  {TOKEN_ENV}=xoxb-… pepe --slack=#{name} …          # in CI"
-    ));
+    let finished = finish(&token, &team, &url, &name, &id).await?;
+    done(&finished);
     Ok(())
 }
 
@@ -560,6 +613,22 @@ pub async fn find_channel(token: &str, text: &str) -> Result<(String, String), S
     pick_channel(&Api::new(token), Some(text)).await
 }
 
+/// What connecting left: where it's kept, and the test message
+pub struct Done {
+    pub path: PathBuf,
+    pub permalink: Option<String>,
+    /// Pepe's face, for the app's icon
+    pub icon: Option<PathBuf>,
+    pub team: String,
+    pub channel: String,
+    /// `pepe slack serve` has what it needs, and who may ask it
+    pub buttons: bool,
+    pub allowed: Vec<String>,
+}
+
+/// Pepe's face as Slack asks an app's icon to be: 512 pixels square
+const ICON: &[u8] = include_bytes!("../site/img/pepe-icon.png");
+
 /// Join the channel, post the test message there, and keep it all
 pub async fn finish(
     token: &str,
@@ -567,7 +636,7 @@ pub async fn finish(
     url: &str,
     name: &str,
     id: &str,
-) -> Result<PathBuf, String> {
+) -> Result<Done, String> {
     let api = Api::new(token);
     // A public channel is joined; a private one must have invited pepe
     let _ = api
@@ -576,19 +645,215 @@ pub async fn finish(
     let mut live = Live::new(token, id);
     live.show(&json!({
         "text": "pepe is connected",
-        "blocks": [
-            {"type": "section", "text": {"type": "mrkdwn", "text": "🔔 *pepe is connected.* Load tests run with `--slack` post here: one message, kept up to date as the run goes, its thread for what changes, and the verdict at the end."}},
-            {"type": "context", "elements": [{"type": "mrkdwn", "text": "`pepe --slack -z 30s https://…` · `webhook = \"slack:\"` in pepe.toml"}]}
-        ]
+        "icon_url": crate::webhook::face("happy"),
+        "attachments": [{
+            "color": "#ff8a3d",
+            "blocks": [
+                {"type": "header", "text": {"type": "plain_text", "text": "👋 pepe is here", "emoji": true}},
+                {"type": "section", "text": {"type": "mrkdwn", "text": "Load tests run with `--slack` post in this channel: *one message per run*, kept up to date as it goes (progress, throughput, latency, errors), what changes in its thread, and the verdict at the end, with the thresholds and how it compares with the last run."}},
+                {"type": "context", "elements": [{"type": "mrkdwn", "text": "`pepe --slack -z 30s https://…` · `webhook = \"slack:\"` in a pepe.toml · `pepe slack status`"}]}
+            ]
+        }]
     }))
     .await?;
-    save(&Connection {
+    let permalink = match live.ts() {
+        Some(ts) => api
+            .call(
+                "chat.getPermalink",
+                &[
+                    ("channel", live.channel().to_string()),
+                    ("message_ts", ts.to_string()),
+                ],
+            )
+            .await
+            .ok()
+            .and_then(|v| v["permalink"].as_str().map(str::to_string)),
+        None => None,
+    };
+    let path = save(&Connection {
         token: token.trim().to_string(),
         team: team.to_string(),
         url: url.to_string(),
         channel: Some(format!("#{name}")),
         channel_id: Some(id.to_string()),
+        ..Connection::default()
+    })?;
+    let icon = path.with_file_name("pepe-icon.png");
+    let icon = std::fs::write(&icon, ICON).ok().map(|()| icon);
+    Ok(Done {
+        path,
+        permalink,
+        icon,
+        team: team.to_string(),
+        channel: format!("#{name}"),
+        buttons: false,
+        allowed: Vec::new(),
     })
+}
+
+/// The app-level token works: Slack opens a Socket Mode connection for it
+pub async fn check_app(app_token: &str) -> Result<(), String> {
+    let app_token = app_token.trim();
+    if !app_token.starts_with("xapp-") {
+        return Err("that isn't an app-level token: it starts with xapp-, under Basic Information → App-Level Tokens".into());
+    }
+    match Api::new(app_token).call("apps.connections.open", &[]).await {
+        Ok(_) => Ok(()),
+        Err(e) if e.contains("isn't valid") => Err("Slack didn't take that app token: generate one with connections:write".into()),
+        Err(e) => Err(format!(
+            "{e}: an app made before pepe 0.48 has no Socket Mode; pepe slack connect makes one that has"
+        )),
+    }
+}
+
+/// The people `text` names (@names, display names, Slack ids, or `*` for
+/// anyone in the channel): their ids, and how to show them
+pub async fn people(token: &str, text: &str) -> Result<(Vec<String>, Vec<String>), String> {
+    let wanted: Vec<String> = text
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .map(|w| w.trim().trim_start_matches('@').to_string())
+        .filter(|w| !w.is_empty())
+        .collect();
+    if wanted.is_empty() {
+        return Err("name someone: @you, a few @names, or * for anyone in the channel".into());
+    }
+    if wanted.iter().any(|w| w == "*") {
+        return Ok((vec!["*".into()], vec!["anyone in the channel".into()]));
+    }
+    let api = Api::new(token);
+    let mut members = Vec::new();
+    let mut cursor = String::new();
+    for _ in 0..20 {
+        let mut args = vec![("limit", "200".to_string())];
+        if !cursor.is_empty() {
+            args.push(("cursor", cursor.clone()));
+        }
+        let page = api.call("users.list", &args).await?;
+        members.extend(page["members"].as_array().cloned().unwrap_or_default());
+        cursor = page["response_metadata"]["next_cursor"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        if cursor.is_empty() {
+            break;
+        }
+    }
+    let (mut ids, mut names) = (Vec::new(), Vec::new());
+    for want in &wanted {
+        let lower = want.to_lowercase();
+        let found = members.iter().find(|m| {
+            m["deleted"] != true
+                && [
+                    &m["id"],
+                    &m["name"],
+                    &m["profile"]["display_name"],
+                    &m["real_name"],
+                ]
+                .iter()
+                .any(|v| v.as_str().is_some_and(|s| s.to_lowercase() == lower))
+        });
+        match found {
+            Some(m) => {
+                ids.push(m["id"].as_str().unwrap_or_default().to_string());
+                names.push(format!("@{}", m["name"].as_str().unwrap_or(want)));
+            }
+            None => return Err(format!("no one called @{want} in the workspace")),
+        }
+    }
+    Ok((ids, names))
+}
+
+/// Change what `slack.toml` keeps
+pub fn update(change: impl FnOnce(&mut Connection)) -> Result<PathBuf, String> {
+    let mut connection = load().ok_or("Slack isn't connected: pepe slack connect")?;
+    change(&mut connection);
+    save(&connection)
+}
+
+/// `pepe slack allow @a @b`: who may press the buttons, from now on
+pub async fn allow(names: &[String]) -> Result<(), String> {
+    let token = token().ok_or("Slack isn't connected: pepe slack connect")?;
+    let (ids, shown) = people(&token, &names.join(" ")).await?;
+    update(|c| {
+        c.allow = ids;
+        c.allow_names = shown.clone();
+    })?;
+    say(&format!(
+        "✓ {} may run tests from Slack · pepe slack serve picks it up when it starts",
+        shown.join(", ")
+    ));
+    Ok(())
+}
+
+/// What to do now, after connecting
+fn done(d: &Done) {
+    let home = |p: &std::path::Path| {
+        let shown = p.display().to_string();
+        match std::env::var("HOME") {
+            Ok(home) if shown.starts_with(&home) => shown.replacen(&home, "~", 1),
+            _ => shown,
+        }
+    };
+    use wizard::{bold, ember, faint, good};
+    say("");
+    say(&format!(
+        "  {} {}",
+        good("✓"),
+        bold(&format!("pepe posts in {} on {}", d.channel, d.team))
+    ));
+    if let Some(link) = &d.permalink {
+        say(&format!("    {} {link}", faint("the test message")));
+    }
+    say(&format!(
+        "    {} {} {}",
+        faint("the token is kept in"),
+        home(&d.path),
+        faint("(only you can read it)")
+    ));
+    if let Some(icon) = &d.icon {
+        say("");
+        say(&format!(
+            "  {} {}",
+            ember("◆"),
+            bold("Give the app Pepe's face")
+        ));
+        say(&format!(
+            "    {} {} {}",
+            faint("drag"),
+            home(icon),
+            faint("into Basic Information → App icon, at https://api.slack.com/apps")
+        ));
+    }
+    if d.buttons {
+        say("");
+        say(&format!(
+            "  {} {}",
+            ember("◆"),
+            bold("The buttons answer while this runs, in your project")
+        ));
+        say(&format!(
+            "    {:<58}{}",
+            "pepe slack serve",
+            faint(&format!("for {}", d.allowed.join(", ")))
+        ));
+    }
+    say("");
+    say(&format!("  {} {}", ember("◆"), bold("Try it")));
+    let row = |cmd: String, what: &str| say(&format!("    {cmd:<58}{}", faint(what)));
+    row(
+        "pepe --slack -z 30s https://api.example.com/health".into(),
+        "a run, live in the channel",
+    );
+    row("pepe --slack=#another …".into(), "somewhere else");
+    row(
+        "webhook = \"slack:\"".into(),
+        "in a pepe.toml: every run there",
+    );
+    row(
+        format!("{TOKEN_ENV}=xoxb-… pepe --slack={} …", d.channel),
+        "in CI",
+    );
+    say("");
 }
 
 /// `pepe slack status`: what is connected, checked with Slack
@@ -727,14 +992,24 @@ mod tests {
         let payload = |status: &str| json!({"text": status, "blocks": [{"type": "header"}, {"type": "section", "text": {"type": "mrkdwn", "text": status}}]});
         live.show(&payload("🚀 Started")).await.unwrap();
         live.show(&payload("⏳ 40%")).await.unwrap();
-        live.reply("⚠️ p99 jumped", false).await.unwrap();
-        live.end(&payload("❌ Failed: p99 > 300ms"), Some("<!here>"))
+        live.reply("⚠️ p99 jumped", false, Some("https://x/face.png"))
             .await
             .unwrap();
+        live.end(
+            &payload("❌ Failed: p99 > 300ms"),
+            "<!here> ❌ Failed: p99 > 300ms",
+            "https://x/worried.png",
+        )
+        .await
+        .unwrap();
         // The end is said once, however many times it's asked
-        live.end(&payload("❌ again"), Some("<!here>"))
-            .await
-            .unwrap();
+        live.end(
+            &payload("❌ again"),
+            "<!here> again",
+            "https://x/worried.png",
+        )
+        .await
+        .unwrap();
         let calls = calls.lock().unwrap().clone();
         let methods: Vec<&str> = calls.iter().map(|(m, _)| m.as_str()).collect();
         assert_eq!(

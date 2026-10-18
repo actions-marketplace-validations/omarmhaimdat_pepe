@@ -6,6 +6,173 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.49.0](https://github.com/omarmhaimdat/pepe/compare/v0.48.0...v0.49.0) - 2026-10-18
+
+### Added
+
+- *(slack)* pause, resize and stop a run from its message, and /pepe as a dropdown of the saved tests ([#207](https://github.com/omarmhaimdat/pepe/pull/207))
+
+  Builds on #205: richer commands, and control over a run while it goes.
+
+  ## While a run goes
+
+  A run started from Slack gets these controls on its message:
+  - **⏸ Pause / ▶ Resume.** While paused, the message turns grey and says
+  who paused it.
+  - **− 1 / + 1** concurrency. Each button shows the value it sets, e.g.
+  "+ 1 (51)". At 1 there is no − button. A ramp sets its own concurrency,
+  so it gets Pause only.
+  - **■ Stop**, with a confirmation.
+
+  Every change shows in the message at once ("<@maya> raised it to 51 at
+  once"), instead of at the next 10 s update.
+
+  ## Shorter thread replies
+
+  Each change during a run is one short line in the thread, saying what
+  moved and which way:
+  - `📉 Throughput dropped 52% · 5.9k req/s · at 1m26s`
+  - `📈 p99 up 4.5× · 45ms · at 26s`
+  - `🔥 Errors up to 12% · at 2m` (posted with Pepe's on-fire face)
+
+  How it works:
+  - `serve` sends commands over the stdin of the run it started
+  (`src/control.rs`: `pause U1`, `concurrency 63 U1`, `stop U1`).
+  - Every `--json` run loop listens for them when `serve` started it: run,
+  flow, API, replay and ramp. They're applied the same way as the
+  dashboard's keys.
+  - A stop the run can't hear falls back to a ctrl-c signal.
+
+  ## /pepe
+
+  - **`/pepe`, `/pepe list`, or `/pepe run` with no name** opens a card:
+  the saved tests in a dropdown, plus what's running with its controls.
+  - **Picking a test, or `/pepe NAME`,** shows that test's card in place:
+    - what it sends;
+    - its last run;
+    - its trend over the last eight runs, as sparklines;
+    - Run, Edit and run, History.
+  - **History** is one aligned row per run: outcome, when, req/s, p99,
+  errors.
+  - **`/pepe status`** shows what's running.
+  - **Runs started from Slack are now recorded,** so the history and trend
+  stay current.
+
+  ## Checked
+
+  - 397 tests pass; clippy 1.98 is clean.
+  - Against the fake Slack and fake Socket Mode, with a 20 s saved test:
+    1. `/pepe` answered with the dropdown card.
+    2. Picking a test replaced the card in place.
+    3. Run started the test.
+    4. Pause: the message turned grey with Resume and "<@U1> paused it".
+  5. +1 raised concurrency and recomputed both buttons. (Exercised with
+  the earlier 25% steps; the ±1 buttons and the thread lines are covered
+  by unit tests.)
+    6. Resume restarted it.
+    7. `/pepe status` showed the running card.
+  8. Stop ended it: the verdict appeared with its buttons, followed by the
+  result line.
+    9. History listed the run, recorded.
+
+  Not checked against a real Slack workspace.
+
+
+## [0.48.0](https://github.com/omarmhaimdat/pepe/compare/v0.47.0...v0.48.0) - 2026-10-18
+
+### Added
+
+- *(slack)* Stop, Run again and Edit and run on the messages, and /pepe, answered by pepe slack serve ([#205](https://github.com/omarmhaimdat/pepe/pull/205))
+
+  Part 3 of the Slack work: run saved tests from the channel.
+
+  ```bash
+  pepe slack connect      # steps 5 and 6: the app token, and who may press the buttons
+  pepe slack serve        # in the project, left running
+  ```
+
+  ## What it adds
+
+  - **On the messages:**
+  - a saved test's verdict gets **↻ Run again**, **✎ Edit and run** and
+  **History**;
+  - a run started from Slack gets **■ Stop** while it goes, with a
+  confirmation;
+    - the line under the title says who started it.
+  - **`/pepe`:** `run NAME`, `stop`, `history NAME` and `list`, in any
+  channel the app is in.
+  - **`pepe slack serve`:** the one listener. Slack sends every click of
+  an app to one of its Socket Mode connections, not to the run that posted
+  the message, so a single process answers them all. It:
+  - runs this directory's saved tests as `pepe --load NAME
+  --slack=<channel>` child processes, under this directory's `pepe.toml`
+  guardrails;
+  - stops the runs it started the way ctrl-c does, so the verdict still
+  says what was measured;
+  - opens the edit form, filled from the saved test, and shows a bad value
+  beside its field;
+    - logs each click, run and result in its terminal;
+    - reconnects with backoff.
+  - **Who may use it:**
+  - `pepe slack allow @a @b` (or `*`) sets the list; names are looked up
+  in the workspace;
+    - anyone else gets a refusal only they can see;
+  - nothing can be run from Slack that isn't a saved test in that
+  directory.
+  - **`pepe slack connect`** gains two steps:
+  - 5, the app-level token, checked by opening a Socket Mode connection,
+  or skipped with Enter;
+    - 6, who may press the buttons.
+
+  The manifest turns on Socket Mode, interactivity and `/pepe`, and adds
+  the `commands` and `users:read` permissions. An app made by an earlier
+  pepe needs `pepe slack connect` run again.
+  - **`--slack` replaces a saved test's own Slack hook,** keeping its
+  `every` and `mention`, so a run started from Slack still gets one
+  message, not two.
+  - **`src/ws.rs`:** pepe's own websocket client. It handles the handshake
+  over the same rustls, masked text frames, fragments, pings and close. No
+  new dependency.
+
+  ## Checked
+
+  - **Rust tests (395 pass):**
+  - the websocket client against a test server: messages both ways, a
+  message split in three, a ping answered, close;
+    - how clicks and commands are read;
+    - the allow list;
+    - turning the form's values into flags, and the errors for bad values;
+    - the form filled from a saved test;
+    - buttons only where something answers them.
+  - **Lint:** clippy 1.98 is clean, and the docs and avatar checks pass.
+  - **`pepe slack serve` against a fake Socket Mode server** (Python,
+  standard library), which scripted:
+  1. Run again from an allowed user. The child posted its message with
+  Stop.
+  2. `/pepe stop`. The run ended "Stopped", its verdict showed the three
+  buttons, and the result line followed.
+  3. A click from someone not allowed. The refusal went to `response_url`
+  only.
+  4. The edit form with concurrency 0. The acknowledgement carried a field
+  error.
+    5. Edit and run. The form opened (`views.open`).
+    6. `/pepe list`.
+
+    When the fake closed, serve reconnected with backoff.
+  - **The six-step connect checklist** was driven in a pseudo-terminal.
+  `slack.toml` kept the app token and the allowed id.
+
+  **Not checked against a real workspace:**
+  - Socket Mode against Slack's own servers;
+  - the slash command registered from the manifest;
+  - how the form and the buttons look in Slack.
+
+  ## 1.0
+
+  Adds `pepe slack serve`, `pepe slack allow` and `PEPE_SLACK_APP_TOKEN`.
+  That restarts the freeze clock. The report schema is unchanged.
+
+
 ## [0.47.0](https://github.com/omarmhaimdat/pepe/compare/v0.46.0...v0.47.0) - 2026-10-18
 
 ### Added

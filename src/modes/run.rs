@@ -5,6 +5,7 @@ use super::*;
 /// `--json`: no dashboard; run to completion (or Ctrl-C), print the report
 pub(crate) async fn run_json(args: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     let (mut load, connects) = start_load(args, false)?;
+    crate::webhook::begin(hook_run(args), &args.hooks());
     // The clock starts when the warm-up, if any, is over
     let mut started = Instant::now();
     let mut warming = load.warming();
@@ -71,7 +72,11 @@ pub(crate) async fn run_json(args: &Cli) -> Result<(), Box<dyn std::error::Error
                 });
                 if !warming {
                     timeline.advance(started.elapsed());
-                    anomalies.extend(watch.observe(timeline.samples(), false));
+                    for anomaly in watch.observe(timeline.samples(), false) {
+                        crate::webhook::anomaly(&anomaly.text);
+                        anomalies.push(anomaly);
+                    }
+                    crate::webhook::progress(|| hook_progress(&metrics, started.elapsed(), plan(args)));
                 }
                 exporter::publish(|| {
                     exporter::run_page(
@@ -124,6 +129,7 @@ pub(crate) async fn run_json(args: &Cli) -> Result<(), Box<dyn std::error::Error
         report.clone().with_snapshot(false).write_to(path)?;
     }
     let json = report.to_json()?;
+    hooks_end(&report, &crossed(args, &metrics));
     let comparison = if args.record {
         record_result(args, &json)?
     } else {
@@ -134,7 +140,7 @@ pub(crate) async fn run_json(args: &Cli) -> Result<(), Box<dyn std::error::Error
         Some(comparison) => println!("{}", comparison.to_json()?),
         None => println!("{json}"),
     }
-    exit_if_failed(args, &metrics);
+    exit_if_failed(args, &metrics).await;
     finish_rerun(args, comparison.as_ref());
     Ok(())
 }
@@ -199,14 +205,13 @@ pub(crate) async fn run_interactive(
                         continue;
                     }
                 };
-                let request = args.request()?;
-                let mut load = load::start(
-                    clients_for(&request, &args, plan.peak() as usize)?.0,
-                    request,
+                let (mut load, _) = start_requests(
+                    &args,
+                    plan.peak() as usize,
                     plan.levels[0] as usize,
                     Plan::Duration(UNTIL_STOPPED),
                     false,
-                );
+                )?;
                 let mut screen = ui::RampScreen::new(args.clone(), plan);
                 match screen.run(&mut load).await? {
                     ui::Outcome::Restart => continue,
@@ -287,8 +292,9 @@ pub(crate) async fn run_screens(args: &Cli, setup: bool) -> Result<(), Box<dyn s
         _ => None,
     };
     say_if_newer(check).await;
+    crate::webhook::flush().await;
     if let Some(metrics) = farewell.metrics {
-        exit_if_failed(args, &metrics);
+        exit_if_failed(args, &metrics).await;
     }
     finish_rerun(args, comparison.as_ref());
     Ok(())

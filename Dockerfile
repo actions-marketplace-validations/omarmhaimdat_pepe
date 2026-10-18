@@ -12,7 +12,11 @@ RUN apk add --no-cache musl-dev
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
+COPY schema ./schema
 COPY contrib ./contrib
+# Embedded with include_str!: the JSON Schemas and the plugin marketplace
+COPY schema ./schema
+COPY .claude-plugin ./.claude-plugin
 RUN cargo build --release --locked && strip target/release/pepe
 
 FROM scratch

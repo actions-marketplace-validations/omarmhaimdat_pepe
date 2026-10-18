@@ -3,6 +3,7 @@ mod body;
 mod filter;
 pub mod format;
 mod history;
+mod hooks;
 mod kit;
 mod library;
 mod logs;
@@ -25,11 +26,8 @@ pub use setup::{Setup, SetupOutcome};
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-use crossterm::event::{
-    Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent,
-};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent};
 use futures::{FutureExt, StreamExt};
-use ratatui::{backend::CrosstermBackend, Terminal};
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::time::MissedTickBehavior;
 
@@ -553,6 +551,7 @@ impl Dashboard {
         &mut self,
         load: &mut LoadHandle,
     ) -> Result<Outcome, Box<dyn std::error::Error>> {
+        crate::webhook::begin(crate::modes::hook_run(&self.args), &self.args.hooks());
         let mut pump = tokio::time::interval(PUMP);
         pump.set_missed_tick_behavior(MissedTickBehavior::Skip);
         let mut snapshots = tokio::time::interval(crate::SNAPSHOT_EVERY);
@@ -639,6 +638,8 @@ impl Dashboard {
                         }
                         self.verdict = Some(verdict);
                         self.write_snapshot(load, false);
+                        let crossed = crate::modes::crossed(&self.args, &self.metrics);
+                        crate::modes::hooks_end(&self.report_json(load), &crossed);
                     }
                     break;
                 }
@@ -647,9 +648,12 @@ impl Dashboard {
         if self.finished.is_none() && !self.warming {
             self.timeline.advance(self.active());
             for anomaly in self.watch.observe(self.timeline.samples(), self.paused) {
+                crate::webhook::anomaly(&anomaly.text);
                 self.notify_for(anomaly.text.clone(), ANOMALY_TTL);
                 self.anomalies.push(anomaly);
             }
+            let (metrics, plan, active) = (&self.metrics, self.plan, self.active());
+            crate::webhook::progress(|| crate::modes::hook_progress(metrics, active, plan));
         }
         self.refresh_slow_threshold();
         if self.scroll > 0 {
@@ -937,9 +941,10 @@ impl Dashboard {
         &mut self,
         load: &mut LoadHandle,
     ) -> Result<Outcome, Box<dyn std::error::Error>> {
-        let mut terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
+        crate::webhook::begin(crate::modes::hook_run(&self.args), &self.args.hooks());
+        let mut terminal = crate::terminal::Screen::new()?;
         terminal.clear()?;
-        let mut events = EventStream::new();
+        let mut events = crate::terminal::input();
         let mut frames = tokio::time::interval(FRAME);
         frames.set_missed_tick_behavior(MissedTickBehavior::Skip);
         let mut pump = tokio::time::interval(PUMP);
@@ -963,6 +968,8 @@ impl Dashboard {
             }
             tokio::select! {
                 _ = &mut ctrl_c => return Ok(Outcome::Quit),
+                // A frame skipped while the terminal was behind
+                _ = crate::terminal::caught_up(), if terminal.owes() => dirty = true,
                 _ = frames.tick(), if self.animating() => {
                     self.frame += 1;
                     self.drain(load);
@@ -1000,7 +1007,7 @@ impl Dashboard {
     async fn handle_burst(
         &mut self,
         first: Event,
-        events: &mut EventStream,
+        events: &mut crate::terminal::Input,
         load: &LoadHandle,
     ) -> Option<Outcome> {
         let mut resized = matches!(first, Event::Resize(..));
@@ -1033,6 +1040,11 @@ impl Dashboard {
             // Windows reports key releases too; act on presses only
             Event::Key(key) if key.kind == KeyEventKind::Press => self.handle_key(key, load),
             Event::Mouse(mouse) => self.handle_mouse(mouse, load),
+            // A URL pasted into the settings or the webhook page
+            Event::Paste(text) => {
+                settings::paste(&text);
+                None
+            }
             // Anything else (resize, focus, ...) just triggers the redraw
             _ => None,
         }

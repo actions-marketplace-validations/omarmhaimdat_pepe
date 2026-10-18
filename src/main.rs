@@ -35,6 +35,7 @@ mod request;
 mod response;
 mod schema;
 mod settings;
+mod slack;
 mod store;
 mod terminal;
 mod timeline;
@@ -42,6 +43,8 @@ mod trace;
 mod ui;
 mod update;
 mod utils;
+mod vars;
+mod webhook;
 mod wire;
 
 #[derive(Debug)]
@@ -51,6 +54,8 @@ enum PepeError {
     IoError(std::io::Error),
     RequestError(reqwest::Error),
     InvalidUrl(String),
+    /// A `--vars` file that can't fill the request
+    Vars(String),
 }
 
 impl std::fmt::Display for PepeError {
@@ -60,6 +65,7 @@ impl std::fmt::Display for PepeError {
             Self::RequestError(e) => write!(f, "Request error: {}", e),
             Self::IoError(e) => write!(f, "{}", e),
             Self::InvalidUrl(e) => write!(f, "Invalid URL {}", e),
+            Self::Vars(e) => write!(f, "{}", e),
         }
     }
 }
@@ -193,6 +199,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(cli::Command::Schema(what)) = &args.command {
         return schema::print(Some(&what.which));
     }
+    if let Some(cli::Command::Slack(what)) = args.command.clone() {
+        use cli::SlackCommand;
+        let done = match what.what.unwrap_or(SlackCommand::Connect {
+            token: None,
+            channel: None,
+        }) {
+            SlackCommand::Connect { token, channel } => slack::connect(token, channel).await,
+            SlackCommand::Status => slack::status().await,
+            SlackCommand::Test { channel } => {
+                let hook = webhook::Webhook::to(&format!("slack:{}", channel.unwrap_or_default()));
+                let run = webhook::Run {
+                    mode: "test".into(),
+                    target: "pepe slack test".into(),
+                    load: "nothing sent".into(),
+                    ..Default::default()
+                };
+                webhook::try_hook(&hook, &run)
+                    .await
+                    .map(|()| eprintln!("✓ posted a test message"))
+            }
+            SlackCommand::Forget => slack::forget(),
+            SlackCommand::Manifest => {
+                println!("{}", serde_json::to_string_pretty(&slack::manifest())?);
+                Ok(())
+            }
+        };
+        if let Err(e) = done {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     if let Some(cli::Command::Mcp(_)) = &args.command {
         return mcp::serve(mcp::guard_args(&args)).await;
     }
@@ -311,12 +349,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The guardrails, then the dry run, before anything is sent
     if !nothing_to_run {
         let guard = guard::Guard::of(&args);
-        let checked = guard.check_url(&args.url).and_then(|_| match &ramp {
-            Some(ramp) => RampPlan::from_args(ramp)
-                .map_err(|e| e.to_string())
-                .and_then(|plan| guard.check_ramp(plan.peak())),
-            None => guard.check_run(&args),
-        });
+        // With `--vars`, every row's URL
+        let checked = args
+            .target_urls()
+            .and_then(|urls| urls.iter().try_for_each(|url| guard.check_url(url)))
+            .and_then(|_| match &ramp {
+                Some(ramp) => RampPlan::from_args(ramp)
+                    .map_err(|e| e.to_string())
+                    .and_then(|plan| guard.check_ramp(plan.peak())),
+                None => guard.check_run(&args),
+            });
         if let Err(e) = checked {
             eprintln!("error: {e}");
             std::process::exit(2);

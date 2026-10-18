@@ -4,6 +4,7 @@ use reqwest::Proxy;
 use crate::curl;
 use crate::request::{parse_header, Request, RequestSettings};
 use crate::utils::{default_user_agent, num_of_cores, version};
+use crate::vars::{Fill, Vars};
 use crate::PepeError;
 
 #[derive(Parser, Debug, Clone)]
@@ -104,6 +105,38 @@ pub struct Cli {
     /// X-Amzn-Trace-Id and other common ones are looked for
     #[arg(long, global = true, value_name = "NAME")]
     pub trace_header: Option<String>,
+
+    /// Fill the {{holes}} in the URL, headers and body from this CSV
+    /// file, whose first line names them: each request takes the next
+    /// row, and the rows go round again. In a flow, each chain starts
+    /// with the next row's values
+    #[arg(long, global = true, value_name = "FILE")]
+    pub vars: Option<std::path::PathBuf>,
+
+    /// Send the run's verdict to this URL when it ends: a Slack, Discord,
+    /// Teams or Google Chat webhook gets a message laid out for it,
+    /// anything else the JSON report; repeat for more. ${NAME} is taken
+    /// from the environment. A [[webhook]] table in pepe.toml says more
+    #[arg(long, global = true, value_name = "URL")]
+    pub webhook: Vec<String>,
+
+    /// When the --webhook URLs are sent: start, progress, anomaly, end,
+    /// fail (the end when a --fail-if was crossed), comma-separated; end
+    /// by default
+    #[arg(long, global = true, value_name = "EVENTS")]
+    pub webhook_on: Option<String>,
+
+    /// Keep a Slack message up to date as the run goes: posted at the
+    /// start, edited with the numbers, anomalies in its thread, the
+    /// verdict at the end. --slack alone posts in the channel `pepe slack
+    /// connect` kept; --slack=#channel elsewhere
+    #[arg(long, global = true, value_name = "CHANNEL", num_args = 0..=1, require_equals = true, default_missing_value = "")]
+    pub slack: Option<String>,
+
+    /// Webhooks from a pepe.toml, the settings or the screens, when no
+    /// --webhook was given
+    #[arg(skip)]
+    pub webhooks: Vec<crate::webhook::Webhook>,
 
     /// Write the JSON report so far to this file every minute while the
     /// run goes, and once more when it ends, so a long run's numbers
@@ -265,6 +298,38 @@ pub enum Command {
     SelfUpdate(SelfUpdateArgs),
     /// Tab completion for your shell: print the script, or --install it
     Completions(CompletionsArgs),
+    /// Connect pepe to Slack from here, so --slack keeps a message there up to date as a run goes
+    Slack(SlackArgs),
+}
+
+#[derive(clap::Args, Debug, Clone, PartialEq, Default)]
+pub struct SlackArgs {
+    #[command(subcommand)]
+    pub what: Option<SlackCommand>,
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq)]
+pub enum SlackCommand {
+    /// Make pepe's Slack app, take its token, pick a channel, post a test (the default)
+    Connect {
+        /// The bot token (xoxb-…), instead of asking for it
+        #[arg(long)]
+        token: Option<String>,
+        /// The channel, instead of asking which
+        #[arg(long)]
+        channel: Option<String>,
+    },
+    /// What is connected, checked with Slack
+    Status,
+    /// Post a test message
+    Test {
+        /// Where, if not the connected channel
+        channel: Option<String>,
+    },
+    /// Remove the kept token
+    Forget,
+    /// Print the app's manifest, for Slack's "From a manifest"
+    Manifest,
 }
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Default)]
@@ -644,6 +709,16 @@ impl Cli {
                 ));
             }
         }
+        if let Some(on) = &self.webhook_on {
+            crate::webhook::Event::parse_list(on).map_err(|e| {
+                Error::raw(
+                    clap::error::ErrorKind::ValueValidation,
+                    format!("--webhook-on: {e}"),
+                )
+            })?;
+        }
+        crate::webhook::check(&self.hooks())
+            .map_err(|e| Error::raw(clap::error::ErrorKind::ValueValidation, e))?;
         if self.otlp.is_some() && self.command.is_some() {
             return Err(Error::raw(
                 clap::error::ErrorKind::ArgumentConflict,
@@ -729,7 +804,9 @@ impl Cli {
         }
         // Parsed once more when the run starts; checked here for a clean
         // message rather than a dashboard full of failures
-        if !self.url.is_empty() {
+        if let Some(path) = &self.vars {
+            self.check_vars(path)?;
+        } else if !self.url.is_empty() {
             if let Err(e) = reqwest::Url::parse(&self.url) {
                 return Err(Error::raw(
                     clap::error::ErrorKind::ValueValidation,
@@ -867,12 +944,17 @@ impl Cli {
     pub fn command_line_masked(&self) -> String {
         let mut masked = self.clone();
         masked.headers = crate::guard::Plan::headers_of(&self.headers);
-        masked.command_line()
+        masked.command_line_of(true)
     }
 
     /// The pepe command that reproduces these settings, leaving out
     /// everything still at its default
     pub fn command_line(&self) -> String {
+        self.command_line_of(false)
+    }
+
+    /// `masked`: a webhook's URL, its secret, as `webhook::mask` shows it
+    fn command_line_of(&self, masked: bool) -> String {
         let defaults = Cli::parse_from(["pepe", "x"]);
         let mut parts = vec!["pepe".to_string()];
         match &self.command {
@@ -883,6 +965,8 @@ impl Cli {
             Some(Command::Ping(_)) => parts.push("ping".into()),
             _ => {}
         }
+        // `--slack` and `--slack=#channel`, added once `flag` is done
+        let mut slack_flags: Vec<String> = Vec::new();
         let mut flag = |name: &str, value: &str| {
             parts.push(name.to_string());
             parts.push(shell_quote(value));
@@ -990,6 +1074,41 @@ impl Cli {
         if let Some(warmup) = &self.warmup {
             flag("--warmup", warmup);
         }
+        if let Some(path) = &self.vars {
+            flag("--vars", &path.display().to_string());
+        }
+        // A hook a file says more of than a URL is the file's to say
+        let hooks = self.hooks();
+        if hooks.iter().all(|h| {
+            h.headers.is_empty()
+                && h.body.is_none()
+                && h.every.is_none()
+                && h.mention.is_none()
+                && h.format == crate::webhook::Format::Auto
+        }) {
+            // `slack:` hooks as --slack; the rest as --webhook
+            let (slack, hooks): (Vec<_>, Vec<_>) =
+                hooks.iter().partition(|h| h.is_slack() && h.on.is_empty());
+            for hook in &hooks {
+                if masked {
+                    flag("--webhook", &hook.masked_url());
+                } else {
+                    flag("--webhook", &hook.url);
+                }
+            }
+            for hook in slack {
+                match hook.url.trim_start().trim_start_matches("slack:") {
+                    "" => slack_flags.push("--slack".into()),
+                    channel => slack_flags.push(format!("--slack={}", shell_quote(channel))),
+                }
+            }
+            if let Some(first) = hooks.first() {
+                if !first.on.is_empty() && hooks.iter().all(|h| h.on == first.on) {
+                    let on: Vec<&str> = first.on.iter().map(|e| e.name()).collect();
+                    flag("--webhook-on", &on.join(","));
+                }
+            }
+        }
         if let Some(rate) = self.rate {
             flag("--rate", &rate.to_string());
         }
@@ -1027,6 +1146,7 @@ impl Cli {
             }
         }
         parts.extend(switches.iter().map(|s| s.to_string()));
+        parts.extend(slack_flags);
         parts.push(shell_quote(&target));
         parts.extend(more_targets.iter().map(|t| shell_quote(t)));
         parts.join(" ")
@@ -1079,14 +1199,145 @@ impl Cli {
             .map(std::time::Duration::from_millis)
     }
 
+    /// The request; with `--vars`, the first row's
     pub fn request(&self) -> Result<Request, PepeError> {
+        match self.rows()? {
+            Some((vars, fill)) => self.row_request(&vars, &fill, 0),
+            None => Request::new(
+                self.url.clone(),
+                self.method.clone(),
+                self.body(),
+                &self.headers,
+                self.settings(),
+            ),
+        }
+    }
+
+    /// `--vars`: the file, and the request with holes its rows fill
+    pub fn rows(&self) -> Result<Option<(Vars, Fill)>, PepeError> {
+        let Some(path) = &self.vars else {
+            return Ok(None);
+        };
+        let vars = Vars::load(path).map_err(PepeError::Vars)?;
+        Ok(Some((vars, self.fill())))
+    }
+
+    /// The request of row `index`
+    pub fn row_request(
+        &self,
+        vars: &Vars,
+        fill: &Fill,
+        index: usize,
+    ) -> Result<Request, PepeError> {
+        let row = fill.row(vars, index);
         Request::new(
-            self.url.clone(),
+            row.url,
             self.method.clone(),
-            self.body(),
-            &self.headers,
+            row.body,
+            &row.headers,
             self.settings(),
         )
+        .map_err(|e| {
+            PepeError::Vars(format!(
+                "--vars {} row {}: {e}",
+                vars.path.display(),
+                index + 1
+            ))
+        })
+    }
+
+    /// The run's webhooks: those the screens' webhook page set, else those
+    /// of `--webhook`, else of a file
+    pub fn hooks(&self) -> Vec<crate::webhook::Webhook> {
+        if let Some(edited) = crate::webhook::edited() {
+            return edited;
+        }
+        let mut hooks = self.flag_hooks();
+        if let Some(channel) = &self.slack {
+            let url = format!("slack:{channel}");
+            if !hooks.iter().any(|h| h.url == url) {
+                hooks.push(crate::webhook::Webhook::to(&url));
+            }
+        }
+        hooks
+    }
+
+    fn flag_hooks(&self) -> Vec<crate::webhook::Webhook> {
+        if self.webhook.is_empty() {
+            return self.webhooks.clone();
+        }
+        let on = self
+            .webhook_on
+            .as_deref()
+            .and_then(|t| crate::webhook::Event::parse_list(t).ok())
+            .unwrap_or_default();
+        self.webhook
+            .iter()
+            .map(|url| crate::webhook::Webhook {
+                on: on.clone(),
+                ..crate::webhook::Webhook::to(url)
+            })
+            .collect()
+    }
+
+    /// The request as written, holes and all
+    pub fn fill(&self) -> Fill {
+        Fill::of(&self.url, &self.headers, self.body())
+    }
+
+    /// Every URL a run sends to, each once: the one, or with `--vars`
+    /// each row's
+    pub fn target_urls(&self) -> Result<Vec<String>, String> {
+        let Some(path) = &self.vars else {
+            return Ok(vec![self.url.clone()]);
+        };
+        let vars = Vars::load(path)?;
+        let fill = self.fill();
+        let mut urls: Vec<String> = (0..vars.rows.len())
+            .map(|i| fill.row(&vars, i).url)
+            .collect();
+        urls.sort_unstable();
+        urls.dedup();
+        Ok(urls)
+    }
+
+    /// `--vars` with a run or a ramp: the file is read, every hole is one
+    /// of its columns, and the first row makes a URL
+    fn check_vars(&self, path: &std::path::Path) -> Result<(), Error> {
+        let fail = |e: String| Error::raw(clap::error::ErrorKind::ValueValidation, e);
+        match &self.command {
+            None | Some(Command::Ramp(_)) | Some(Command::Flow(_)) => {}
+            Some(_) => {
+                return Err(fail(
+                    "--vars fills the {{holes}} of a run, a ramp or a flow".into(),
+                ))
+            }
+        }
+        // A flow's holes are checked as the flow is read
+        if matches!(self.command, Some(Command::Flow(_))) || self.url.is_empty() {
+            return Ok(());
+        }
+        let vars = Vars::load(path).map_err(fail)?;
+        let fill = self.fill();
+        let holes = fill.holes();
+        if holes.is_empty() {
+            return Err(fail(format!(
+                "--vars {}: the request has no {{{{holes}}}} to fill; put one where a value goes, as in https://api.example.com/users/{{{{{}}}}}",
+                path.display(),
+                vars.names[0]
+            )));
+        }
+        vars.check(holes)
+            .map_err(|e| fail(format!("--vars: {e}")))?;
+        let url = fill.row(&vars, 0).url;
+        reqwest::Url::parse(&url).map_err(|e| {
+            fail(format!(
+                "--vars {} row 1: {}",
+                path.display(),
+                Self::url_trouble(&url, e)
+            ))
+        })?;
+        Ok(())
     }
 }
 

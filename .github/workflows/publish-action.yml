@@ -24,7 +24,7 @@ jobs:
     env:
       TAG: ${{ fromJson(inputs.plan).announcement_tag }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0

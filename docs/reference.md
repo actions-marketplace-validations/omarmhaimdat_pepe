@@ -143,7 +143,7 @@ Options:
           Say what would be sent, to where and how much, and send nothing; as JSON with --json
 
       --fail-if <CONDITION>
-          End with exit code 4 when the run crosses this, for CI and scripts: 'p99 > 300ms', 'errors > 1%'; repeat for more. The report is still printed. (pepe ping has --slo for the same.)
+          End with exit code 4 when the run crosses this, for CI and scripts: 'p99 > 300ms', 'errors > 1%'; repeat for more. The report is still printed. pepe logs takes '5xx > 2%', '4xx > 20%' and 'rate < 5/s' too. (pepe ping has --slo for the same.)
 
       --metrics <ADDR>
           Serve the live numbers for Prometheus at http://ADDR/metrics while the run goes, e.g. :9100 or 127.0.0.1:9100, so a soak run or a long ping shows up in Grafana next to the server's own
@@ -374,7 +374,7 @@ Options:
           Say what would be sent, to where and how much, and send nothing; as JSON with --json
 
       --fail-if <CONDITION>
-          End with exit code 4 when the run crosses this, for CI and scripts: 'p99 > 300ms', 'errors > 1%'; repeat for more. The report is still printed. (pepe ping has --slo for the same.)
+          End with exit code 4 when the run crosses this, for CI and scripts: 'p99 > 300ms', 'errors > 1%'; repeat for more. The report is still printed. pepe logs takes '5xx > 2%', '4xx > 20%' and 'rate < 5/s' too. (pepe ping has --slo for the same.)
 
       --metrics <ADDR>
           Serve the live numbers for Prometheus at http://ADDR/metrics while the run goes, e.g. :9100 or 127.0.0.1:9100, so a soak run or a long ping shows up in Grafana next to the server's own
@@ -532,7 +532,7 @@ Options:
           Say what would be sent, to where and how much, and send nothing; as JSON with --json
 
       --fail-if <CONDITION>
-          End with exit code 4 when the run crosses this, for CI and scripts: 'p99 > 300ms', 'errors > 1%'; repeat for more. The report is still printed. (pepe ping has --slo for the same.)
+          End with exit code 4 when the run crosses this, for CI and scripts: 'p99 > 300ms', 'errors > 1%'; repeat for more. The report is still printed. pepe logs takes '5xx > 2%', '4xx > 20%' and 'rate < 5/s' too. (pepe ping has --slo for the same.)
 
       --metrics <ADDR>
           Serve the live numbers for Prometheus at http://ADDR/metrics while the run goes, e.g. :9100 or 127.0.0.1:9100, so a soak run or a long ping shows up in Grafana next to the server's own
@@ -676,7 +676,7 @@ Options:
           Say what would be sent, to where and how much, and send nothing; as JSON with --json
 
       --fail-if <CONDITION>
-          End with exit code 4 when the run crosses this, for CI and scripts: 'p99 > 300ms', 'errors > 1%'; repeat for more. The report is still printed. (pepe ping has --slo for the same.)
+          End with exit code 4 when the run crosses this, for CI and scripts: 'p99 > 300ms', 'errors > 1%'; repeat for more. The report is still printed. pepe logs takes '5xx > 2%', '4xx > 20%' and 'rate < 5/s' too. (pepe ping has --slo for the same.)
 
       --metrics <ADDR>
           Serve the live numbers for Prometheus at http://ADDR/metrics while the run goes, e.g. :9100 or 127.0.0.1:9100, so a soak run or a long ping shows up in Grafana next to the server's own
@@ -835,7 +835,7 @@ Options:
           Say what would be sent, to where and how much, and send nothing; as JSON with --json
 
       --fail-if <CONDITION>
-          End with exit code 4 when the run crosses this, for CI and scripts: 'p99 > 300ms', 'errors > 1%'; repeat for more. The report is still printed. (pepe ping has --slo for the same.)
+          End with exit code 4 when the run crosses this, for CI and scripts: 'p99 > 300ms', 'errors > 1%'; repeat for more. The report is still printed. pepe logs takes '5xx > 2%', '4xx > 20%' and 'rate < 5/s' too. (pepe ping has --slo for the same.)
 
       --metrics <ADDR>
           Serve the live numbers for Prometheus at http://ADDR/metrics while the run goes, e.g. :9100 or 127.0.0.1:9100, so a soak run or a long ping shows up in Grafana next to the server's own
@@ -970,7 +970,7 @@ Options:
           Say what would be sent, to where and how much, and send nothing; as JSON with --json
 
       --fail-if <CONDITION>
-          End with exit code 4 when the run crosses this, for CI and scripts: 'p99 > 300ms', 'errors > 1%'; repeat for more. The report is still printed. (pepe ping has --slo for the same.)
+          End with exit code 4 when the run crosses this, for CI and scripts: 'p99 > 300ms', 'errors > 1%'; repeat for more. The report is still printed. pepe logs takes '5xx > 2%', '4xx > 20%' and 'rate < 5/s' too. (pepe ping has --slo for the same.)
 
       --metrics <ADDR>
           Serve the live numbers for Prometheus at http://ADDR/metrics while the run goes, e.g. :9100 or 127.0.0.1:9100, so a soak run or a long ping shows up in Grafana next to the server's own
@@ -1116,7 +1116,7 @@ Options:
           Say what would be sent, to where and how much, and send nothing; as JSON with --json
 
       --fail-if <CONDITION>
-          End with exit code 4 when the run crosses this, for CI and scripts: 'p99 > 300ms', 'errors > 1%'; repeat for more. The report is still printed. (pepe ping has --slo for the same.)
+          End with exit code 4 when the run crosses this, for CI and scripts: 'p99 > 300ms', 'errors > 1%'; repeat for more. The report is still printed. pepe logs takes '5xx > 2%', '4xx > 20%' and 'rate < 5/s' too. (pepe ping has --slo for the same.)
 
       --metrics <ADDR>
           Serve the live numbers for Prometheus at http://ADDR/metrics while the run goes, e.g. :9100 or 127.0.0.1:9100, so a soak run or a long ping shows up in Grafana next to the server's own
@@ -1173,6 +1173,18 @@ Options:
           Rows in each table of the report
           
           [default: 10]
+
+      --path <PATH>
+          Count only the requests to these paths, with * for any run of characters: /api/*, /login; repeat for more. An error log line counts when its request does
+
+      --status <CODES>
+          Count only the requests that answered these: 404, 5xx, 4xx,503; repeat for more. Error log lines are still counted
+
+      --host <HOST>
+          Count only the requests to these hosts (the log's $host): shop.test exactly, .example.com for it and every host under it; repeat for more
+
+      --until <TIME>
+          Leave out what is newer than this, e.g. 1h for up to an hour ago; with --since, a stretch in the past. A log read up to a time in the past isn't followed
 
   -h, --help
           Print help
@@ -1273,7 +1285,7 @@ Options:
           Say what would be sent, to where and how much, and send nothing; as JSON with --json
 
       --fail-if <CONDITION>
-          End with exit code 4 when the run crosses this, for CI and scripts: 'p99 > 300ms', 'errors > 1%'; repeat for more. The report is still printed. (pepe ping has --slo for the same.)
+          End with exit code 4 when the run crosses this, for CI and scripts: 'p99 > 300ms', 'errors > 1%'; repeat for more. The report is still printed. pepe logs takes '5xx > 2%', '4xx > 20%' and 'rate < 5/s' too. (pepe ping has --slo for the same.)
 
       --metrics <ADDR>
           Serve the live numbers for Prometheus at http://ADDR/metrics while the run goes, e.g. :9100 or 127.0.0.1:9100, so a soak run or a long ping shows up in Grafana next to the server's own
@@ -1411,7 +1423,7 @@ Options:
           Say what would be sent, to where and how much, and send nothing; as JSON with --json
 
       --fail-if <CONDITION>
-          End with exit code 4 when the run crosses this, for CI and scripts: 'p99 > 300ms', 'errors > 1%'; repeat for more. The report is still printed. (pepe ping has --slo for the same.)
+          End with exit code 4 when the run crosses this, for CI and scripts: 'p99 > 300ms', 'errors > 1%'; repeat for more. The report is still printed. pepe logs takes '5xx > 2%', '4xx > 20%' and 'rate < 5/s' too. (pepe ping has --slo for the same.)
 
       --metrics <ADDR>
           Serve the live numbers for Prometheus at http://ADDR/metrics while the run goes, e.g. :9100 or 127.0.0.1:9100, so a soak run or a long ping shows up in Grafana next to the server's own
@@ -1546,7 +1558,7 @@ Options:
           Say what would be sent, to where and how much, and send nothing; as JSON with --json
 
       --fail-if <CONDITION>
-          End with exit code 4 when the run crosses this, for CI and scripts: 'p99 > 300ms', 'errors > 1%'; repeat for more. The report is still printed. (pepe ping has --slo for the same.)
+          End with exit code 4 when the run crosses this, for CI and scripts: 'p99 > 300ms', 'errors > 1%'; repeat for more. The report is still printed. pepe logs takes '5xx > 2%', '4xx > 20%' and 'rate < 5/s' too. (pepe ping has --slo for the same.)
 
       --metrics <ADDR>
           Serve the live numbers for Prometheus at http://ADDR/metrics while the run goes, e.g. :9100 or 127.0.0.1:9100, so a soak run or a long ping shows up in Grafana next to the server's own
@@ -1683,7 +1695,7 @@ Options:
           Say what would be sent, to where and how much, and send nothing; as JSON with --json
 
       --fail-if <CONDITION>
-          End with exit code 4 when the run crosses this, for CI and scripts: 'p99 > 300ms', 'errors > 1%'; repeat for more. The report is still printed. (pepe ping has --slo for the same.)
+          End with exit code 4 when the run crosses this, for CI and scripts: 'p99 > 300ms', 'errors > 1%'; repeat for more. The report is still printed. pepe logs takes '5xx > 2%', '4xx > 20%' and 'rate < 5/s' too. (pepe ping has --slo for the same.)
 
       --metrics <ADDR>
           Serve the live numbers for Prometheus at http://ADDR/metrics while the run goes, e.g. :9100 or 127.0.0.1:9100, so a soak run or a long ping shows up in Grafana next to the server's own
@@ -1814,7 +1826,7 @@ Options:
           Say what would be sent, to where and how much, and send nothing; as JSON with --json
 
       --fail-if <CONDITION>
-          End with exit code 4 when the run crosses this, for CI and scripts: 'p99 > 300ms', 'errors > 1%'; repeat for more. The report is still printed. (pepe ping has --slo for the same.)
+          End with exit code 4 when the run crosses this, for CI and scripts: 'p99 > 300ms', 'errors > 1%'; repeat for more. The report is still printed. pepe logs takes '5xx > 2%', '4xx > 20%' and 'rate < 5/s' too. (pepe ping has --slo for the same.)
 
       --metrics <ADDR>
           Serve the live numbers for Prometheus at http://ADDR/metrics while the run goes, e.g. :9100 or 127.0.0.1:9100, so a soak run or a long ping shows up in Grafana next to the server's own
@@ -1951,7 +1963,7 @@ Options:
           Say what would be sent, to where and how much, and send nothing; as JSON with --json
 
       --fail-if <CONDITION>
-          End with exit code 4 when the run crosses this, for CI and scripts: 'p99 > 300ms', 'errors > 1%'; repeat for more. The report is still printed. (pepe ping has --slo for the same.)
+          End with exit code 4 when the run crosses this, for CI and scripts: 'p99 > 300ms', 'errors > 1%'; repeat for more. The report is still printed. pepe logs takes '5xx > 2%', '4xx > 20%' and 'rate < 5/s' too. (pepe ping has --slo for the same.)
 
       --metrics <ADDR>
           Serve the live numbers for Prometheus at http://ADDR/metrics while the run goes, e.g. :9100 or 127.0.0.1:9100, so a soak run or a long ping shows up in Grafana next to the server's own
@@ -2091,7 +2103,7 @@ Options:
           Refuse a concurrency above this
 
       --fail-if <CONDITION>
-          End with exit code 4 when the run crosses this, for CI and scripts: 'p99 > 300ms', 'errors > 1%'; repeat for more. The report is still printed. (pepe ping has --slo for the same.)
+          End with exit code 4 when the run crosses this, for CI and scripts: 'p99 > 300ms', 'errors > 1%'; repeat for more. The report is still printed. pepe logs takes '5xx > 2%', '4xx > 20%' and 'rate < 5/s' too. (pepe ping has --slo for the same.)
 
       --metrics <ADDR>
           Serve the live numbers for Prometheus at http://ADDR/metrics while the run goes, e.g. :9100 or 127.0.0.1:9100, so a soak run or a long ping shows up in Grafana next to the server's own
@@ -2232,7 +2244,7 @@ Options:
           Say what would be sent, to where and how much, and send nothing; as JSON with --json
 
       --fail-if <CONDITION>
-          End with exit code 4 when the run crosses this, for CI and scripts: 'p99 > 300ms', 'errors > 1%'; repeat for more. The report is still printed. (pepe ping has --slo for the same.)
+          End with exit code 4 when the run crosses this, for CI and scripts: 'p99 > 300ms', 'errors > 1%'; repeat for more. The report is still printed. pepe logs takes '5xx > 2%', '4xx > 20%' and 'rate < 5/s' too. (pepe ping has --slo for the same.)
 
       --metrics <ADDR>
           Serve the live numbers for Prometheus at http://ADDR/metrics while the run goes, e.g. :9100 or 127.0.0.1:9100, so a soak run or a long ping shows up in Grafana next to the server's own
@@ -2376,7 +2388,7 @@ Options:
           Say what would be sent, to where and how much, and send nothing; as JSON with --json
 
       --fail-if <CONDITION>
-          End with exit code 4 when the run crosses this, for CI and scripts: 'p99 > 300ms', 'errors > 1%'; repeat for more. The report is still printed. (pepe ping has --slo for the same.)
+          End with exit code 4 when the run crosses this, for CI and scripts: 'p99 > 300ms', 'errors > 1%'; repeat for more. The report is still printed. pepe logs takes '5xx > 2%', '4xx > 20%' and 'rate < 5/s' too. (pepe ping has --slo for the same.)
 
       --metrics <ADDR>
           Serve the live numbers for Prometheus at http://ADDR/metrics while the run goes, e.g. :9100 or 127.0.0.1:9100, so a soak run or a long ping shows up in Grafana next to the server's own

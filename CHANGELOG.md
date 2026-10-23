@@ -6,6 +6,155 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.55.0](https://github.com/omarmhaimdat/pepe/compare/v0.54.0...v0.55.0) - 2026-10-23
+
+### Added
+
+- *(logs)* --path, --status, --host and --until, .gz read as is, --metrics, and a logs MCP tool ([#227](https://github.com/omarmhaimdat/pepe/pull/227))
+
+  Third of three PRs making `pepe logs` more powerful (after #223's
+  per-path traffic and #225's findings and alerts).
+
+  ## What changes
+
+  **Filters.** `--path '/api/*'`, `--status 5xx` (or `404`, `4xx,503`),
+  `--host .example.com` (or an exact host) and `--until 1h` keep only
+  those lines.
+  - The filters apply everywhere: every view, the findings, `--fail-if`
+  and the report.
+  - The title shows what was kept (`access.log · /api/* · 5xx`), and the
+  report counts what was left out (`logs.lines_filtered_out`).
+  - Error-log lines are kept by their `request:` and `host:` (added to the
+  error-log parser). A status filter never drops them.
+  - With `--status`, 5xx/4xx share findings are skipped, since they'd read
+  "5xx 100% now, 100% usually".
+  - `--since 2h --until 1h` reads a stretch in the past, and such a log
+  isn't followed. Bad input exits 2 with the reason.
+
+  **`.gz` read as is.** Rotated `access.log.2.gz` files are recognised by
+  their first two bytes, including multi-member gzip.
+  - Unpacking runs on a thread of its own, passing chunks to the reader
+  through a bounded channel.
+  - A `.gz` is never followed, not checked for "being written", and never
+  split across cores. Read progress counts its size on disk.
+  - The docs no longer suggest `zcat ... | pepe logs -`.
+  - New dependency: `flate2` with its pure-Rust backend (`miniz_oxide`),
+  no C to build.
+
+  **`--metrics` while following.** The Prometheus page is re-rendered
+  every second:
+  - `pepe_logs_requests_total{class}`, `_bytes_total`,
+  `_error_log_lines_total{level}`, `_unread_lines_total`
+  - last window: `_requests_per_second`, `_5xx_ratio`, `_4xx_ratio`,
+  `_live`
+  - histograms: `_request_duration_seconds`, `_upstream_duration_seconds`
+  - `pepe_logs_findings{level}` and `pepe_logs_fail_if_crossed{condition}`
+
+  **MCP `logs` tool.** It takes `files` (nginx's own if none are named),
+  `since`, `until`, `window`, `path`, `status`, `host`, `fail_if`,
+  `format`, `exact_paths` and `rows`, and is marked read-only with no
+  outside effects. Exit 4 comes back as an answer, not an error. The
+  server instructions, AGENTS.md, docs/agents.md, llms.txt and the skill
+  list it.
+
+  ## Checked
+  - 425 tests pass; clippy 1.98 is clean. New tests cover glob, status and
+  host matching, the filter on requests and error-log lines, `--until`, a
+  two-member `.gz` giving the same report as the plain file (and not
+  "being written"), and the MCP argument mapping.
+  - By hand:
+  - `pepe mcp` answered a `logs` call over stdio with the verdict and
+  `fail_if`.
+  - `--metrics` was scraped from a live screen driven in a pty, and the
+  session quit cleanly.
+  - The filters, and bad `--status` / `--until` values, were run on the
+  generated log.
+
+  ## Cost (bench/README.md)
+  | | before | after |
+  | --- | ---: | ---: |
+  | 862 MB log, every core, no filter (against v0.54) | 0.35 s, 3.1 s CPU,
+  ~140 MB | same |
+  | 189 MB log as `.gz`: `zcat \| pepe logs -` → `pepe logs file.gz` |
+  0.52 s | 0.51 s, 28 MB |
+
+  Unpacking on the reading thread took 0.71 s, which is why it gets a
+  thread of its own. A first version checked the filter on every line and
+  cost about 4% CPU; it is now checked once per chunk.
+
+  ## Caveats
+  - The MCP `logs` tool reads any file the server's user can read, like
+  `replay` and `compare` do. The report can quote a line it couldn't parse
+  (`first_unread_line`) and error-log examples. Whoever starts `pepe mcp`
+  decides what it runs as.
+  - `--host` needs `$host` in the log format; the default `combined`
+  format has none.
+
+  ## 1.0
+  This adds `pepe logs` flags (`--path`, `--status`, `--host`, `--until`),
+  a report field (`lines_filtered_out`) and an MCP tool, so it restarts
+  the month without a flag or schema change.
+
+  Please squash-merge with this title so release-plz picks it up.
+
+
+## [0.54.0](https://github.com/omarmhaimdat/pepe/compare/v0.53.0...v0.54.0) - 2026-10-23
+
+### Added
+
+- *(logs)* findings, --fail-if limits and webhooks for nginx's logs ([#225](https://github.com/omarmhaimdat/pepe/pull/225))
+
+  Second of three PRs making `pepe logs` more powerful (after #223's
+  per-path traffic; next: MCP tool, flag filters, `.gz`).
+
+  ## What changes
+
+  **Findings.** The last minute (`--window`) is compared with the minutes
+  before it and with the same hour a day before. What is out of the usual
+  is listed most serious first, on the dashboard, in the text report and
+  in `--json`:
+
+  | Level | Rule |
+  | --- | --- |
+  | bad | ≥5% of requests answer 5xx · a path answers 5xx to ≥10% or 4xx
+  to ≥50% · error log at ≥10× its usual · traffic under a tenth of usual
+  while live · p99 ≥5× a usual minute and over 1s |
+  | warn | the same, lower: ≥1% 5xx and 3× usual · path ≥2% 5xx / ≥30% 4xx
+  and 3× usual · error log 3× · traffic under a third or twice usual · p99
+  2× and over 200ms |
+  | note | one client sends ≥20% of requests and twice the next ·
+  unreadable lines |
+  | good | nothing out of the usual |
+
+  - A path's share needs ≥5 failed requests in the window, so one failure
+  in forty isn't a finding.
+  - Each finding says since when and what the usual was. A latency finding
+  names the path whose mean time changed most, and whether that time is
+  upstream (the app) or inside nginx.
+  - On the dashboard, `↑` `↓` pick a finding and `enter` opens it: Traffic
+  held to its path ([#223](https://github.com/omarmhaimdat/pepe/pull/223)), or the Errors or Paths tab.
+  - The verdict word now follows the findings (any bad → Failing).
+
+  **`--fail-if`** gets its own grammar in `pepe logs`: `5xx > 2%`, `4xx >
+  20%`, `p99 > 1s`, `rate < 5/s` (rate is the one measure that also takes
+  `<`).
+  - Read once (piped, `--json`, cron), it is checked against everything
+  read, so `--since 15m` sets the period.
+  - While following, it is checked against the last `--window` every
+  second.
+  - A crossed limit gives exit code 4 after the report. On the screen,
+  crossing it even once counts, and the report says when.
+
+  **Webhooks and Slack** now work in `pepe logs`:
+  - Read once: `end`, and `fail` when a limit was crossed.
+  - While following: a finding turning bad, a limit crossed or held again,
+  and a finding going away are sent as `anomaly` events. `--slack` keeps
+  one message up to date. Nothing is sent until the log has been read up
+  to where it is being written.
+  - The webhook layout reads a logs report: requests, rate now, 5xx share,
+  p50/p99, time span, and the findings.
+
+
 ## [0.53.0](https://github.com/omarmhaimdat/pepe/compare/v0.52.0...v0.53.0) - 2026-10-22
 
 ### Added

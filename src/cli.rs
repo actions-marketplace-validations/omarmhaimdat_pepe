@@ -179,7 +179,8 @@ pub struct Cli {
 
     /// End with exit code 4 when the run crosses this, for CI and scripts:
     /// 'p99 > 300ms', 'errors > 1%'; repeat for more. The report is still
-    /// printed. (pepe ping has --slo for the same.)
+    /// printed. pepe logs takes '5xx > 2%', '4xx > 20%' and 'rate < 5/s'
+    /// too. (pepe ping has --slo for the same.)
     #[arg(long, global = true, value_name = "CONDITION")]
     pub fail_if: Vec<String>,
 
@@ -590,6 +591,28 @@ pub struct LogsArgs {
     /// Rows in each table of the report
     #[arg(long, default_value_t = 10, value_name = "N")]
     pub rows: usize,
+
+    /// Count only the requests to these paths, with * for any run of
+    /// characters: /api/*, /login; repeat for more. An error log line
+    /// counts when its request does.
+    #[arg(long = "path", value_name = "PATH")]
+    pub paths: Vec<String>,
+
+    /// Count only the requests that answered these: 404, 5xx, 4xx,503;
+    /// repeat for more. Error log lines are still counted.
+    #[arg(long = "status", value_name = "CODES")]
+    pub statuses: Vec<String>,
+
+    /// Count only the requests to these hosts (the log's $host): shop.test
+    /// exactly, .example.com for it and every host under it; repeat for more
+    #[arg(long = "host", value_name = "HOST")]
+    pub hosts: Vec<String>,
+
+    /// Leave out what is newer than this, e.g. 1h for up to an hour ago;
+    /// with --since, a stretch in the past. A log read up to a time in the
+    /// past isn't followed.
+    #[arg(long, value_name = "TIME")]
+    pub until: Option<String>,
 }
 
 #[derive(clap::Args, Debug, Clone, PartialEq)]

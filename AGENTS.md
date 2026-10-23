@@ -130,6 +130,20 @@ Read `verdict` (`faster`, `same`, `slower`, `better`, `worse`),
 `regression`, `changes[]` with `significant` and `noise_percent`, and
 `findings`. Ping reports compare too, phase by phase.
 
+## Watch nginx
+
+```bash
+pepe logs /var/log/nginx/access.log /var/log/nginx/error.log --since 15m --json --fail-if '5xx > 2%' --fail-if 'rate < 5/s'
+```
+
+Read `verdict.level` and `verdict.findings[]` (`level`, `kind`, `text`,
+`path`, `since`, `now`, `usual`): what is out of the usual in the last
+minute, most serious first; and `fail_if[]` (`condition`, `held`,
+`measured`). A crossed limit is exit code 4. `--webhook` sends the
+verdict, so a cron line is an alert. `--path '/api/*'`, `--status 5xx`,
+`--host .example.com` and `--until 1h` keep only those lines; rotated
+`.gz` files are read as they are.
+
 ## A whole API, a journey, real traffic
 
 `pepe api openapi.yaml --all --json` (writes need `--include-writes`;
@@ -178,9 +192,10 @@ disk every minute.
 ## As an MCP server
 
 `pepe mcp` serves the modes above as tools over stdio (`run`, `ping`,
-`ramp`, `compare`, `api`, `flow`, `replay`), each returning the JSON
-report; `run` takes `otlp`, the others but `compare` take `save` to write
-the report for `compare`, and the `speed-up` prompt walks the loop above.
+`ramp`, `compare`, `api`, `flow`, `replay`, `logs`), each returning the
+JSON report; `run` takes `otlp`, the others but `compare` and `logs` take
+`save` to write the report for `compare`, `logs` reads nginx's logs and
+sends nothing, and the `speed-up` prompt walks the loop above.
 Guardrail flags given to `pepe mcp` apply to every call. In Codex:
 `codex mcp add pepe -- pepe mcp --max-requests 10000 --max-rate 500`. It is
 in the MCP registry as `io.github.omarmhaimdat/pepe` (`uvx pepe-http

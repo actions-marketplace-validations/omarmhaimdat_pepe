@@ -42,7 +42,7 @@ pepe · dry run · nothing sent
 
 ## As an MCP server
 
-`pepe mcp` serves the modes as tools over stdio, in the Model Context Protocol: `run`, `ping`, `ramp`, `api`, `flow`, `replay` and `compare`, each returning pepe's JSON report as text and as structured content. The guardrail flags `pepe mcp` is started with hold for every call, so whoever starts the server decides where it may send and how much, and a tool call can't loosen them.
+`pepe mcp` serves the modes as tools over stdio, in the Model Context Protocol: `run`, `ping`, `ramp`, `api`, `flow`, `replay`, `logs` and `compare`, each returning pepe's JSON report as text and as structured content. The guardrail flags `pepe mcp` is started with hold for every call, so whoever starts the server decides where it may send and how much, and a tool call can't loosen them.
 
 ```bash
 pepe mcp --allow-host .staging.example.com --max-requests 10000 --max-rate 500 --max-concurrency 64
@@ -170,6 +170,14 @@ pepe compare before.json after.json --json --gate
 ```
 
 Read `verdict` (`faster`, `same`, `slower`, `better`, `worse`), `regression`, each `changes[]` entry with `significant` (moved more than two such runs wobble) and `noise_percent`, and `findings`. Ping reports compare too, phase by phase.
+
+## Watch nginx
+
+```bash
+pepe logs /var/log/nginx/access.log /var/log/nginx/error.log --since 15m --json --fail-if '5xx > 2%' --fail-if 'rate < 5/s'
+```
+
+Read `verdict.level` (`healthy`, `degraded`, `failing`) and `verdict.findings[]`, what is out of the usual in the last minute, most serious first, each with `level`, `kind`, `text`, and `path`, `since`, `now`, `usual` when they apply; and `fail_if[]` with `condition`, `held` and `measured`. A crossed limit is exit code 4, and `--webhook` sends the verdict, so a cron line is an alert. See [nginx logs](logs.md#what-is-wrong).
 
 ## Test a whole API or a journey
 
